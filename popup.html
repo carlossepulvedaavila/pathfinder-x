@@ -39,6 +39,18 @@
             color: #2d5a2d;
         }
 
+        .status.active.selected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.active.locked {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
         .element-info {
             background: #f8f9fa;
             border-radius: 8px;
@@ -134,6 +146,51 @@
         .clear-all:hover {
             background: #545b62;
         }
+
+        .lock-controls {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .lock-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #856404;
+            font-weight: 500;
+        }
+
+        .lock-icon {
+            font-size: 14px;
+        }
+
+        .unlock-btn {
+            background: #ffc107;
+            color: #212529;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 10px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .unlock-btn:hover {
+            background: #e0a800;
+        }
+
+        .locked .status {
+            background: #fff3cd;
+            color: #856404;
+        }
     </style>
 </head>
 
@@ -141,6 +198,14 @@
     <div class="header">
         <h3>Pathfinder-X</h3>
         <div class="status" id="status">Ready</div>
+    </div>
+
+    <div class="lock-controls" id="lockControls" style="display: none;">
+        <div class="lock-status">
+            <span class="lock-icon">🔒</span>
+            <span>Element Locked</span>
+        </div>
+        <button class="unlock-btn" id="unlockButton">Unlock</button>
     </div>
 
     <div class="element-info" id="elementInfo">

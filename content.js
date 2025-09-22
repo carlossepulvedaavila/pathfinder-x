@@ -357,6 +357,10 @@ let lastElement = null;
 let throttleTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
+let lockedElement = null; // Track locked element
+let isLocked = false; // Track if element is locked
+let isPopupOpen = false; // Track if popup is open
+let hoverEnabled = false; // Track if hover detection should be active
 
 // Cleanup function to remove event listeners and highlights
 function cleanup() {
@@ -376,6 +380,7 @@ function cleanup() {
   // Remove event listeners
   document.removeEventListener("mouseover", handleMouseOver);
   document.removeEventListener("mouseout", handleMouseOut);
+  document.removeEventListener("click", handleClick);
 
   console.log("Pathfinder-X content script cleaned up");
 }
@@ -393,6 +398,20 @@ function createHighlightOverlay() {
   `;
   document.body.appendChild(overlay);
   return overlay;
+}
+
+function updateHighlightStyle(locked = false) {
+  if (highlightedElement) {
+    if (locked) {
+      highlightedElement.style.background = "rgba(255, 193, 7, 0.4)";
+      highlightedElement.style.border = "2px solid #ffc107";
+      highlightedElement.style.boxShadow = "0 0 0 2px rgba(255, 193, 7, 0.3)";
+    } else {
+      highlightedElement.style.background = "rgba(255, 0, 0, 0.3)";
+      highlightedElement.style.border = "2px solid #ff0000";
+      highlightedElement.style.boxShadow = "none";
+    }
+  }
 }
 
 function highlightElement(element) {
@@ -422,6 +441,11 @@ function handleMouseOver(event) {
   // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
+    return;
+  }
+
+  // Only process hover events if popup is open and hover is enabled
+  if (!isPopupOpen || !hoverEnabled) {
     return;
   }
 
@@ -467,12 +491,6 @@ function handleMouseOver(event) {
 
     console.log("Content script sending message:", message);
 
-    // Store in chrome.storage for popup to read
-    chrome.storage.local.set({
-      currentXPath: message,
-      timestamp: Date.now(),
-    });
-
     // Send message with error handling
     try {
       console.log("Content script: About to send message to background");
@@ -506,6 +524,11 @@ function handleMouseOut(event) {
     return;
   }
 
+  // Only process mouseout events if popup is open and hover is enabled
+  if (!isPopupOpen || !hoverEnabled) {
+    return;
+  }
+
   // Only remove highlight if we're not moving to a child element
   if (
     !event.relatedTarget ||
@@ -518,12 +541,6 @@ function handleMouseOut(event) {
       clearTimeout(throttleTimeout);
       throttleTimeout = null;
     }
-
-    // Store clear message
-    chrome.storage.local.set({
-      currentXPath: { type: "XPATH_CLEAR" },
-      timestamp: Date.now(),
-    });
 
     // Send message with error handling
     try {
@@ -545,11 +562,157 @@ function handleMouseOut(event) {
   }
 }
 
+function handleClick(event) {
+  // Check if extension is still valid
+  if (!isExtensionValid || !checkExtensionContext()) {
+    cleanup();
+    return;
+  }
+
+  // Only process click events if popup is open and hover is enabled
+  if (!isPopupOpen || !hoverEnabled) {
+    return;
+  }
+
+  const element = event.target;
+
+  // Skip if clicking on certain elements
+  if (
+    element.tagName === "HTML" ||
+    element.tagName === "BODY" ||
+    element === document.documentElement ||
+    element.id === "pathfinder-x-highlight"
+  ) {
+    return;
+  }
+
+  // Prevent default action and stop propagation to avoid interfering with page
+  event.preventDefault();
+  event.stopPropagation();
+
+  // Generate XPath options for the clicked element
+  const xpathOptions = [
+    { type: "Absolute XPath", xpath: getAbsoluteXPath(element) },
+    { type: "Optimized", xpath: getOptimizedXPath(element) },
+    { type: "Relative", xpath: getRelativeXPath(element) },
+    { type: "Text-based", xpath: getTextBasedXPath(element) },
+  ].filter((option) => option.xpath);
+
+  console.log("Content script: Element clicked and locked", element);
+  console.log("Content script generated XPaths:", xpathOptions);
+
+  if (!xpathOptions || xpathOptions.length === 0) {
+    console.error("Content script: No XPath options generated!");
+    return;
+  }
+
+  const message = {
+    type: "XPATH_SELECTED",
+    xpaths: xpathOptions,
+    elementInfo: {
+      tagName: element.tagName,
+      id: element.id,
+      className: element.className,
+      textContent: element.textContent
+        ? element.textContent.trim().substring(0, 50)
+        : "",
+    },
+    isSelected: true,
+  };
+
+  console.log("Content script sending selected message:", message);
+
+  // Send message with error handling
+  try {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        console.log("Extension context invalidated, cleaning up...");
+        cleanup();
+      } else {
+        console.log(
+          "Content script: Selected message sent successfully, response:",
+          response
+        );
+      }
+    });
+  } catch (error) {
+    console.log("Content script: Exception sending message:", error);
+    console.log("Extension context invalidated, cleaning up...");
+    cleanup();
+  }
+
+  // Briefly flash the element as selected, then continue hover detection
+  highlightElement(element);
+  updateHighlightStyle(true);
+
+  // Clear the selection highlight after a brief moment and continue hover detection
+  setTimeout(() => {
+    removeHighlight();
+    lastElement = null; // Reset last element so hover works on the same element again
+  }, 300);
+}
+
+// Function to unlock element
+function unlockElement() {
+  isLocked = false;
+  lockedElement = null;
+  removeHighlight();
+
+  // Send unlock message to popup
+  try {
+    chrome.runtime.sendMessage(
+      {
+        type: "XPATH_UNLOCKED",
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.log("Extension context invalidated, cleaning up...");
+          cleanup();
+        }
+      }
+    );
+  } catch (error) {
+    console.log("Extension context invalidated, cleaning up...");
+    cleanup();
+  }
+}
+
+// Listen for messages from popup
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "UNLOCK_ELEMENT") {
+    unlockElement();
+    sendResponse({ success: true });
+  } else if (message.type === "POPUP_OPENED") {
+    isPopupOpen = true;
+    hoverEnabled = true;
+    console.log("Content script: Popup opened, hover detection enabled");
+    sendResponse({ success: true });
+  } else if (message.type === "POPUP_CLOSED") {
+    isPopupOpen = false;
+    hoverEnabled = false;
+    removeHighlight();
+    lastElement = null;
+    console.log("Content script: Popup closed, hover detection disabled");
+    sendResponse({ success: true });
+  } else if (message.type === "ENABLE_HOVER") {
+    hoverEnabled = true;
+    console.log("Content script: Hover detection enabled");
+    sendResponse({ success: true });
+  } else if (message.type === "DISABLE_HOVER") {
+    hoverEnabled = false;
+    removeHighlight();
+    lastElement = null;
+    console.log("Content script: Hover detection disabled");
+    sendResponse({ success: true });
+  }
+});
+
 // Initialize the extension if context is valid
 if (initializeContentScript()) {
   // Event listeners with performance optimizations
   document.addEventListener("mouseover", handleMouseOver, { passive: true });
   document.addEventListener("mouseout", handleMouseOut, { passive: true });
+  document.addEventListener("click", handleClick, { passive: false });
 
   // Clean up on page unload
   window.addEventListener("beforeunload", () => {

@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   console.log("Popup: DOM loaded, initializing...");
 
   const xpathContainer = document.getElementById("xpathContainer");
@@ -7,6 +7,26 @@ document.addEventListener("DOMContentLoaded", () => {
   const elementText = document.getElementById("elementText");
   const status = document.getElementById("status");
   const clearButton = document.getElementById("clearButton");
+  const lockControls = document.getElementById("lockControls");
+  const unlockButton = document.getElementById("unlockButton");
+
+  // Notify content script that popup is opened
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    chrome.tabs.sendMessage(tab.id, { type: "POPUP_OPENED" }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.log(
+          "Could not notify content script of popup open:",
+          chrome.runtime.lastError
+        );
+      }
+    });
+  } catch (error) {
+    console.log("Error notifying content script:", error);
+  }
 
   console.log("Popup: All DOM elements found:", {
     xpathContainer: !!xpathContainer,
@@ -15,33 +35,84 @@ document.addEventListener("DOMContentLoaded", () => {
     elementText: !!elementText,
     status: !!status,
     clearButton: !!clearButton,
+    lockControls: !!lockControls,
+    unlockButton: !!unlockButton,
   });
 
   let currentXPaths = [];
+  let isLocked = false;
 
   // 1. Immediately check local storage for the last saved XPath
   chrome.storage.local.get(["lastMessage"], (result) => {
-    if (result.lastMessage && result.lastMessage.type === "XPATH_FOUND") {
-      displayXPaths(result.lastMessage.xpaths, result.lastMessage.elementInfo);
-      status.textContent = "Element Selected";
-      status.className = "status active";
+    console.log("Popup: Retrieved from storage:", result);
+    if (
+      result.lastMessage &&
+      (result.lastMessage.type === "XPATH_FOUND" ||
+        result.lastMessage.type === "XPATH_LOCKED" ||
+        result.lastMessage.type === "XPATH_SELECTED")
+    ) {
+      console.log("Popup: Found stored XPath data, displaying...");
+      const locked = result.lastMessage.type === "XPATH_LOCKED";
+      displayXPaths(
+        result.lastMessage.xpaths,
+        result.lastMessage.elementInfo,
+        locked
+      );
+
+      if (locked) {
+        isLocked = true;
+        status.textContent = "Element Locked";
+        status.className = "status active locked";
+        lockControls.style.display = "flex";
+      } else {
+        status.textContent = "Hover over elements to get XPath";
+        status.className = "status active";
+      }
     } else {
+      console.log("Popup: No stored XPath data found, showing placeholder");
       clearDisplay();
     }
   });
 
   // 2. Listen for real-time updates from background script while popup is open
   chrome.runtime.onMessage.addListener((message) => {
+    console.log("Popup: Received message:", message);
     if (message.type === "XPATH_FOUND") {
+      console.log("Popup: Processing XPATH_FOUND message");
+      if (!isLocked) {
+        // Only update if not locked
+        displayXPaths(message.xpaths, message.elementInfo);
+        status.textContent = "Hovering - click to select";
+        status.className = "status active";
+      }
+    } else if (message.type === "XPATH_SELECTED") {
+      console.log("Popup: Processing XPATH_SELECTED message");
       displayXPaths(message.xpaths, message.elementInfo);
-      status.textContent = "Element Selected";
-      status.className = "status active";
+      status.textContent = "Element selected - continue hovering";
+      status.className = "status active selected";
+    } else if (message.type === "XPATH_LOCKED") {
+      console.log("Popup: Processing XPATH_LOCKED message");
+      isLocked = true;
+      displayXPaths(message.xpaths, message.elementInfo, true);
+      status.textContent = "Element Locked";
+      status.className = "status active locked";
+      lockControls.style.display = "flex";
     } else if (message.type === "XPATH_CLEAR") {
+      console.log("Popup: Processing XPATH_CLEAR message");
+      if (!isLocked) {
+        // Only clear if not locked
+        status.textContent = "Hover over elements to get XPath";
+        status.className = "status active";
+      }
+    } else if (message.type === "XPATH_UNLOCKED") {
+      console.log("Popup: Processing XPATH_UNLOCKED message");
+      isLocked = false;
+      lockControls.style.display = "none";
       clearDisplay();
     }
   });
 
-  function displayXPaths(xpaths, elementInfo) {
+  function displayXPaths(xpaths, elementInfo, locked = false) {
     console.log("Popup: displayXPaths called with:", { xpaths, elementInfo });
 
     currentXPaths = xpaths;
@@ -50,7 +121,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (elementInfo) {
       elementTag.textContent = `<${elementInfo.tagName.toLowerCase()}>`;
       elementText.textContent = elementInfo.textContent || "No text content";
-      elementInfo.style.display = "block";
+      document.getElementById("elementInfo").style.display = "block";
     }
 
     // Clear container
@@ -113,15 +184,22 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function clearDisplay() {
+    const placeholderText = isLocked
+      ? "Element is locked. Click 'Unlock' to resume hover detection."
+      : "Hover over any element on the webpage to generate XPath selectors optimized for Playwright and Selenium.";
+
     xpathContainer.innerHTML = `
       <div class="placeholder">
-        Hover over any element on the webpage to generate XPath selectors optimized for Playwright and Selenium.
+        ${placeholderText}
       </div>
     `;
-    elementInfo.style.display = "none";
+    document.getElementById("elementInfo").style.display = "none";
     clearButton.style.display = "none";
-    status.textContent = "Ready";
-    status.className = "status";
+    lockControls.style.display = "none";
+    status.textContent = isLocked
+      ? "Element Locked"
+      : "Hover over elements to get XPath";
+    status.className = isLocked ? "status active locked" : "status active";
     currentXPaths = [];
   }
 
@@ -177,6 +255,43 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Unlock button functionality
+  unlockButton.addEventListener("click", async () => {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      chrome.tabs.sendMessage(
+        tab.id,
+        { type: "UNLOCK_ELEMENT" },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("Error unlocking element:", chrome.runtime.lastError);
+          } else {
+            console.log("Element unlocked successfully");
+          }
+        }
+      );
+    } catch (error) {
+      console.error("Error sending unlock message:", error);
+    }
+  });
+
   // Initial state setup
   clearButton.addEventListener("click", clearDisplay);
+
+  // Handle popup close - notify content script to disable hover detection
+  window.addEventListener("beforeunload", async () => {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      chrome.tabs.sendMessage(tab.id, { type: "POPUP_CLOSED" });
+    } catch (error) {
+      console.log("Error notifying content script of popup close:", error);
+    }
+  });
 });
