@@ -45,7 +45,6 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "pathfinder-xpath") {
-    // Open the popup or inject content script
     chrome.action.openPopup();
   }
 });

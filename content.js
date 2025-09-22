@@ -361,6 +361,7 @@ let lockedElement = null; // Track locked element
 let isLocked = false; // Track if element is locked
 let isPopupOpen = false; // Track if popup is open
 let hoverEnabled = false; // Track if hover detection should be active
+let listenersAttached = false; // Track if hover listeners are attached
 
 // Cleanup function to remove event listeners and highlights
 function cleanup() {
@@ -377,12 +378,28 @@ function cleanup() {
     contextCheckInterval = null;
   }
 
-  // Remove event listeners
+  // Detach hover listeners if present
+  detachHoverListeners();
+
+  console.log("Pathfinder-X content script cleaned up");
+}
+
+function attachHoverListeners() {
+  if (listenersAttached) return;
+  document.addEventListener("mouseover", handleMouseOver, { passive: true });
+  document.addEventListener("mouseout", handleMouseOut, { passive: true });
+  document.addEventListener("click", handleClick, { passive: false });
+  listenersAttached = true;
+  console.log("Content script: Hover listeners attached");
+}
+
+function detachHoverListeners() {
+  if (!listenersAttached) return;
   document.removeEventListener("mouseover", handleMouseOver);
   document.removeEventListener("mouseout", handleMouseOut);
   document.removeEventListener("click", handleClick);
-
-  console.log("Pathfinder-X content script cleaned up");
+  listenersAttached = false;
+  console.log("Content script: Hover listeners detached");
 }
 function createHighlightOverlay() {
   const overlay = document.createElement("div");
@@ -685,6 +702,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === "POPUP_OPENED") {
     isPopupOpen = true;
     hoverEnabled = true;
+    attachHoverListeners();
     console.log("Content script: Popup opened, hover detection enabled");
     sendResponse({ success: true });
   } else if (message.type === "POPUP_CLOSED") {
@@ -692,6 +710,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hoverEnabled = false;
     removeHighlight();
     lastElement = null;
+    detachHoverListeners();
     console.log("Content script: Popup closed, hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "ENABLE_HOVER") {
@@ -709,10 +728,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Initialize the extension if context is valid
 if (initializeContentScript()) {
-  // Event listeners with performance optimizations
-  document.addEventListener("mouseover", handleMouseOver, { passive: true });
-  document.addEventListener("mouseout", handleMouseOut, { passive: true });
-  document.addEventListener("click", handleClick, { passive: false });
+  // Do NOT attach hover listeners yet; wait for popup to open
 
   // Clean up on page unload
   window.addEventListener("beforeunload", () => {
@@ -720,9 +736,12 @@ if (initializeContentScript()) {
     if (throttleTimeout) {
       clearTimeout(throttleTimeout);
     }
+    detachHoverListeners();
   });
 
-  console.log("Pathfinder-X: Event listeners attached successfully");
+  console.log(
+    "Pathfinder-X: Base content script setup complete; listeners will attach when popup opens"
+  );
 
   // Periodic check for extension context (every 5 seconds)
   contextCheckInterval = setInterval(() => {
