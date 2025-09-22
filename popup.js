@@ -165,10 +165,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Validate XPath
       validateXPath(option.xpath).then((isValid) => {
         if (isValid) {
-          validation.textContent = "✓ Valid XPath";
+          validation.textContent = "Valid XPath";
           validation.className = "validation valid";
         } else {
-          validation.textContent = "⚠ Invalid XPath";
+          validation.textContent = "Invalid XPath";
           validation.className = "validation invalid";
         }
       });
