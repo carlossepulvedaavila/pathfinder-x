@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Debug Test Page</title>
+</head>
+
+<body>
+    <h1>Debug Test for Pathfinder-X</h1>
+    <button id="test-button" data-testid="debug-button">Click me to test XPath generation</button>
+
+    <div class="test-class">Test div with class</div>
+
+    <p name="test-paragraph">Test paragraph with name attribute</p>
+
+    <script>
+        // Add some debugging
+        console.log("Test page loaded");
+
+        // Check if extension is loaded
+        if (typeof chrome !== 'undefined' && chrome.runtime) {
+            console.log("Chrome extension API available");
+        } else {
+            console.log("Chrome extension API not available");
+        }
+    </script>
+</body>
+
+</html>

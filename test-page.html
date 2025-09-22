@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathfinder-X Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        .special-class {
+            background: #f0f0f0;
+            padding: 10px;
+        }
+
+        button {
+            margin: 5px;
+            padding: 8px 16px;
+        }
+
+        input {
+            margin: 5px;
+            padding: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1 id="main-title">Pathfinder-X Test Page</h1>
+
+    <div class="test-section">
+        <h2>Test Elements with IDs</h2>
+        <button id="unique-button">Button with ID</button>
+        <input id="test-input" placeholder="Input with ID" />
+    </div>
+
+    <div class="test-section">
+        <h2>Test Elements with Classes</h2>
+        <div class="special-class">Div with unique class</div>
+        <span class="special-class another-class">Span with multiple classes</span>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Elements with Data Attributes</h2>
+        <button data-testid="login-button">Login Button (data-testid)</button>
+        <div data-test="user-profile">User Profile (data-test)</div>
+        <input data-cy="email-input" placeholder="Email (data-cy)" />
+    </div>
+
+    <div class="test-section">
+        <h2>Test Elements with Other Attributes</h2>
+        <input name="username" placeholder="Username field" />
+        <button aria-label="Close dialog">X</button>
+        <img alt="Test image"
+            src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2NjYyIvPjwvc3ZnPg==" />
+    </div>
+
+    <div class="test-section">
+        <h2>Test Text-based Elements</h2>
+        <a href="#">Click here to test</a>
+        <button>Submit Form</button>
+        <span>Simple text span</span>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Complex Structure</h2>
+        <div>
+            <div>
+                <div>
+                    <button>Deeply nested button</button>
+                </div>
+            </div>
+        </div>
+
+        <ul>
+            <li>First item</li>
+            <li>Second item</li>
+            <li>Third item</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Elements Without Unique Identifiers</h2>
+        <div>Generic div 1</div>
+        <div>Generic div 2</div>
+        <p>Generic paragraph 1</p>
+        <p>Generic paragraph 2</p>
+    </div>
+</body>
+
+</html>
