@@ -9,6 +9,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const clearButton = document.getElementById("clearButton");
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
+  const toggle = document.getElementById("toggle");
 
   // Notify content script that popup is opened
   try {
@@ -37,14 +38,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     clearButton: !!clearButton,
     lockControls: !!lockControls,
     unlockButton: !!unlockButton,
+    toggle: !!toggle,
   });
 
   let currentXPaths = [];
   let isLocked = false;
 
-  // 1. Immediately check local storage for the last saved XPath
-  chrome.storage.local.get(["lastMessage"], (result) => {
+  // 1. Immediately check local storage for the last saved XPath and toggle state
+  chrome.storage.local.get(["lastMessage", "isHoveringEnabled"], (result) => {
     console.log("Popup: Retrieved from storage:", result);
+
+    // Set toggle state
+    const isHoveringEnabled = result.isHoveringEnabled !== false; // Default to true
+    toggle.checked = isHoveringEnabled;
+    if (isHoveringEnabled) {
+      enableHover();
+    } else {
+      disableHover();
+    }
+
     if (
       result.lastMessage &&
       (result.lastMessage.type === "XPATH_FOUND" ||
@@ -278,6 +290,45 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.error("Error sending unlock message:", error);
     }
   });
+
+  // Toggle switch functionality
+  toggle.addEventListener("change", () => {
+    if (toggle.checked) {
+      enableHover();
+    } else {
+      disableHover();
+    }
+  });
+
+  async function enableHover() {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      chrome.tabs.sendMessage(tab.id, { type: "ENABLE_HOVER" });
+      chrome.storage.local.set({ isHoveringEnabled: true });
+      status.textContent = "Hovering Enabled";
+      status.className = "status active";
+    } catch (error) {
+      console.error("Error enabling hover:", error);
+    }
+  }
+
+  async function disableHover() {
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      chrome.tabs.sendMessage(tab.id, { type: "DISABLE_HOVER" });
+      chrome.storage.local.set({ isHoveringEnabled: false });
+      status.textContent = "Hovering Disabled";
+      status.className = "status";
+    } catch (error) {
+      console.error("Error disabling hover:", error);
+    }
+  }
 
   // Initial state setup
   clearButton.addEventListener("click", clearDisplay);

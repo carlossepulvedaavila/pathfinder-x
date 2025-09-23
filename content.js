@@ -704,9 +704,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   } else if (message.type === "POPUP_OPENED") {
     isPopupOpen = true;
-    hoverEnabled = true;
+    // Don't enable hover here, wait for the popup to tell us
     attachHoverListeners();
-    console.log("Content script: Popup opened, hover detection enabled");
+    console.log("Content script: Popup opened, listeners attached");
     sendResponse({ success: true });
   } else if (message.type === "POPUP_CLOSED") {
     isPopupOpen = false;
