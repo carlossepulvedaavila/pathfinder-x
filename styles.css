@@ -1,0 +1,187 @@
+body {
+  width: 400px;
+  max-height: 600px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+h3 {
+  margin: 0;
+  color: #333;
+  font-size: 18px;
+}
+
+.status {
+  font-size: 12px;
+  color: #666;
+  background: #f5f5f5;
+  padding: 4px 8px;
+  border-radius: 12px;
+}
+
+.status.active {
+  background: #e8f5e8;
+  color: #2d5a2d;
+}
+
+.status.active.selected {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.status.active.locked {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+}
+
+.element-info {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: #555;
+  display: none;
+}
+
+.xpath-option {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.xpath-header {
+  background: #f8f9fa;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #555;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.xpath-content {
+  padding: 12px;
+  font-family: "Monaco", "Menlo", monospace;
+  font-size: 11px;
+  word-wrap: break-word;
+  background: #fdfdfd;
+  border-top: 1px solid #eee;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.copy-btn {
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.copy-btn:hover {
+  background: #005a9e;
+}
+
+.copy-btn.copied {
+  background: #28a745;
+}
+
+.placeholder {
+  text-align: center;
+  color: #666;
+  padding: 40px 20px;
+  font-size: 14px;
+}
+
+.validation {
+  font-size: 10px;
+  color: #666;
+  margin-top: 4px;
+}
+
+.validation.valid {
+  color: #28a745;
+}
+
+.validation.invalid {
+  color: #dc3545;
+}
+
+.clear-all {
+  background: #6c757d;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.clear-all:hover {
+  background: #545b62;
+}
+
+.lock-controls {
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.lock-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #856404;
+  font-weight: 500;
+}
+
+.lock-icon {
+  font-size: 14px;
+}
+
+.unlock-btn {
+  background: #ffc107;
+  color: #212529;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.unlock-btn:hover {
+  background: #e0a800;
+}
+
+.locked .status {
+  background: #fff3cd;
+  color: #856404;
+}
