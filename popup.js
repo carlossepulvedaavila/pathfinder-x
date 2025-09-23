@@ -283,15 +283,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   clearButton.addEventListener("click", clearDisplay);
 
   // Handle popup close - notify content script to disable hover detection
-  window.addEventListener("beforeunload", async () => {
+  async function notifyPopupClosed() {
     try {
       const [tab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       });
-      chrome.tabs.sendMessage(tab.id, { type: "POPUP_CLOSED" });
+      if (tab && tab.id) {
+        chrome.tabs.sendMessage(tab.id, { type: "POPUP_CLOSED" });
+      }
     } catch (error) {
       console.log("Error notifying content script of popup close:", error);
     }
-  });
+  }
+
+  // Use both beforeunload and unload for maximum reliability across browsers / edge cases
+  window.addEventListener("beforeunload", notifyPopupClosed);
+  window.addEventListener("unload", notifyPopupClosed);
 });
