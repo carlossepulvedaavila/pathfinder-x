@@ -1,7 +1,7 @@
 # Pathfinder-X: Your Ultimate XPath Finder 🧭
 
 <p align="center">
-  <img src="https://via.placeholder.com/600x300.png?text=Pathfinder-X+In+Action" alt="Pathfinder-X in action">
+  <img src="https://github.com/carlossepulvedaavila/pathfinder-x/blob/main/images/Pathfinder-X.png" alt="Pathfinder-X in action">
 </p>
 
 Pathfinder-X is a simple and powerful Chrome extension that helps you find the best XPath for any element on a webpage. It's designed for developers, testers, and anyone who needs to work with web automation.
