@@ -196,15 +196,32 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function clearDisplay() {
-    const placeholderText = isLocked
-      ? "Element is locked. Click 'Unlock' to resume hover detection."
-      : "Hover over any element on the webpage to generate XPath selectors optimized for Playwright and Selenium.";
+    const statusStrongText = isLocked
+      ? "Element is locked."
+      : "Hover over any element on the webpage";
 
-    xpathContainer.innerHTML = `
-      <div class="placeholder">
-        ${placeholderText}
-      </div>
-    `;
+    const strongText = isLocked
+      ? "Click 'Unlock' to resume hover detection."
+      : " to generate XPath selectors optimized for Playwright and Selenium.";
+
+    const placeholderHTML = ` 
+       <div class="placeholder"> 
+         <img 
+           class="placeholder__icon" 
+           src= ${
+             isLocked ? "./images/locked-icon.png" : "./images/hover-icon.png"
+           } 
+           alt="Hover Icon" 
+         /> 
+         <p> 
+           <strong>${statusStrongText}</strong> 
+           <br /> 
+           ${strongText} 
+         </p> 
+       </div> 
+     `;
+
+    xpathContainer.innerHTML = placeholderHTML;
     document.getElementById("elementInfo").style.display = "none";
     clearButton.style.display = "none";
     lockControls.style.display = "none";

@@ -1,228 +1,272 @@
 body {
-    width: 400px;
-    max-height: 600px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    margin: 0;
-    padding: 16px;
-    overflow-y: auto;
+  width: 400px;
+  max-height: 600px;
+  font-family: "Red Hat Display", sans-serif;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  border-radius: 17px;
 }
 
 .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: #301e88;
+  color: white;
+  padding: 12px 7px 13px 12px;
+  border-radius: 17px 17px 0px 0px;
+  box-shadow: 5px 5px 10px rgba(0, 0, 0, 0.2);
 }
 
-h3 {
-    margin: 0;
-    color: #333;
-    font-size: 18px;
+.header__top {
+  display: flex;
+  justify-content: space-between;
+}
+
+.title__container {
+  display: flex;
+  align-items: center;
+  margin-right: 5px;
+}
+
+.title__icon {
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+}
+
+.title__text {
+  margin: 0;
+  color: #ffffff;
+  font-size: 12px;
+  letter-spacing: 3.5px;
 }
 
 .status {
-    font-size: 12px;
-    color: #666;
-    background: #f5f5f5;
-    padding: 4px 8px;
-    border-radius: 12px;
+  font-size: 12px;
+  color: #787878;
+  background: #bababa;
+  padding: 4px 8px;
+  border-radius: 12px;
 }
 
 .status.active {
-    background: #e8f5e8;
-    color: #2d5a2d;
+  background: #e8f5e8;
+  color: #2d5a2d;
 }
 
 .status.active.selected {
-    background: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
 }
 
 .status.active.locked {
-    background: #fff3cd;
-    color: #856404;
-    border: 1px solid #ffeaa7;
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+}
+
+.modal__content {
+  background-color: #f4f4f6;
 }
 
 .element-info {
-    background: #f8f9fa;
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 16px;
-    font-size: 12px;
-    color: #555;
-    display: none;
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  color: #555;
+  display: none;
 }
 
 .xpath-option {
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    margin-bottom: 8px;
-    overflow: hidden;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
 }
 
 .xpath-header {
-    background: #f8f9fa;
-    padding: 8px 12px;
-    font-weight: 600;
-    font-size: 12px;
-    color: #555;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+  background: #f8f9fa;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #555;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .xpath-content {
-    padding: 12px;
-    font-family: 'Monaco', 'Menlo', monospace;
-    font-size: 11px;
-    word-wrap: break-word;
-    background: #fdfdfd;
-    border-top: 1px solid #eee;
-    max-height: 100px;
-    overflow-y: auto;
+  padding: 12px;
+  font-family: "Monaco", "Menlo", monospace;
+  font-size: 11px;
+  word-wrap: break-word;
+  background: #fdfdfd;
+  border-top: 1px solid #eee;
+  max-height: 100px;
+  overflow-y: auto;
 }
 
 .copy-btn {
-    background: #007acc;
-    color: white;
-    border: none;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 10px;
-    cursor: pointer;
-    transition: background 0.2s;
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
 }
 
 .copy-btn:hover {
-    background: #005a9e;
+  background: #005a9e;
 }
 
 .copy-btn.copied {
-    background: #28a745;
+  background: #28a745;
 }
 
 .placeholder {
-    text-align: center;
-    color: #666;
-    padding: 40px 20px;
-    font-size: 14px;
+  text-align: center;
+  color: #666;
+  padding: 50px 20px;
+  font-size: 14px;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.placeholder img {
+  width: 40px;
+  margin-left: 5px;
+}
+
+.placeholder strong {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.placeholder p {
+  text-align: left;
 }
 
 .validation {
-    font-size: 10px;
-    color: #666;
-    margin-top: 4px;
+  font-size: 10px;
+  color: #666;
+  margin-top: 4px;
 }
 
 .validation.valid {
-    color: #28a745;
+  color: #28a745;
 }
 
 .validation.invalid {
-    color: #dc3545;
+  color: #dc3545;
 }
 
 .clear-all {
-    background: #6c757d;
-    color: white;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 4px;
-    font-size: 12px;
-    cursor: pointer;
-    width: 100%;
-    margin-top: 8px;
+  background: #6c757d;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  width: 100%;
+  margin-top: 8px;
 }
 
 .clear-all:hover {
-    background: #545b62;
+  background: #545b62;
 }
 
 .lock-controls {
-    background: #fff3cd;
-    border: 1px solid #ffeaa7;
-    border-radius: 6px;
-    padding: 8px 12px;
-    margin-bottom: 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
 }
 
 .lock-status {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: #856404;
-    font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #856404;
+  font-weight: 500;
 }
 
 .lock-icon {
-    font-size: 14px;
+  font-size: 14px;
 }
 
 .unlock-btn {
-    background: #ffc107;
-    color: #212529;
-    border: none;
-    padding: 4px 12px;
-    border-radius: 4px;
-    font-size: 10px;
-    cursor: pointer;
-    font-weight: 500;
-    transition: background 0.2s;
+  background: #ffc107;
+  color: #212529;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
 }
 
 .unlock-btn:hover {
-    background: #e0a800;
+  background: #e0a800;
 }
 
 .locked .status {
-    background: #fff3cd;
-    color: #856404;
+  background: #fff3cd;
+  color: #856404;
 }
 
 .toggle-container {
-    display: flex;
-    align-items: center;
+  display: flex;
+  align-items: center;
 }
 
 .toggle-input {
-    display: none;
+  display: none;
 }
 
 .toggle-label {
-    display: block;
-    width: 40px;
-    height: 20px;
-    background-color: #ccc;
-    border-radius: 10px;
-    cursor: pointer;
-    position: relative;
-    transition: background-color 0.2s;
+  display: block;
+  width: 40px;
+  height: 20px;
+  background-color: #ccc;
+  border-radius: 10px;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.2s;
 }
 
 .toggle-label::before {
-    content: "";
-    display: block;
-    width: 16px;
-    height: 16px;
-    background-color: white;
-    border-radius: 50%;
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    transition: left 0.2s;
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(to right, #301e88 0%, #836cf6 100%);
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: left 0.2s;
 }
 
 .toggle-input:checked + .toggle-label {
-    background-color: #28a745;
+  background: linear-gradient(to right, #a390fb, #775bfe);
 }
 
 .toggle-input:checked + .toggle-label::before {
-    left: 22px;
+  left: 22px;
+  background: white;
 }
