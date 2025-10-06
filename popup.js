@@ -77,7 +77,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         status.className = "status active locked";
         lockControls.style.display = "flex";
       } else {
-        status.textContent = "Hover over elements to get XPath";
+        status.textContent = "Hover for XPath";
         status.className = "status active";
       }
     } else {
@@ -113,7 +113,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.log("Popup: Processing XPATH_CLEAR message");
       if (!isLocked) {
         // Only clear if not locked
-        status.textContent = "Hover over elements to get XPath";
+        status.textContent = "Hover for XPath";
         status.className = "status active";
       }
     } else if (message.type === "XPATH_UNLOCKED") {
@@ -169,7 +169,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const content = document.createElement("div");
       content.className = "xpath-content";
-      content.textContent = option.xpath;
+      
+      const textSpan = document.createElement("span");
+      textSpan.className = "xpath-text-highlight";
+      textSpan.textContent = option.xpath;
 
       const validation = document.createElement("div");
       validation.className = "validation";
@@ -187,7 +190,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       optionDiv.appendChild(header);
       optionDiv.appendChild(content);
-      optionDiv.appendChild(validation);
+      content.appendChild(textSpan);
+      content.appendChild(validation);
 
       xpathContainer.appendChild(optionDiv);
     });
@@ -198,7 +202,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function clearDisplay() {
     const statusStrongText = isLocked
       ? "Element is locked."
-      : "Hover over any element on the webpage";
+      : "Hover over any element on the page";
 
     const strongText = isLocked
       ? "Click 'Unlock' to resume hover detection."
@@ -225,9 +229,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("elementInfo").style.display = "none";
     clearButton.style.display = "none";
     lockControls.style.display = "none";
-    status.textContent = isLocked
-      ? "Element Locked"
-      : "Hover over elements to get XPath";
+    status.textContent = isLocked ? "Element Locked" : "Hover for XPath";
     status.className = isLocked ? "status active locked" : "status active";
     currentXPaths = [];
   }
@@ -242,13 +244,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       setTimeout(() => {
         button.textContent = originalText;
         button.className = "copy-btn";
-      }, 1500);
+      }, 1800);
     } catch (err) {
       console.error("Failed to copy XPath:", err);
       button.textContent = "Error";
       setTimeout(() => {
         button.textContent = "Copy";
-      }, 1500);
+      }, 1800);
     }
   }
 
