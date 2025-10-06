@@ -23,6 +23,59 @@ document.addEventListener("DOMContentLoaded", async () => {
           "Could not notify content script of popup open:",
           chrome.runtime.lastError
         );
+      } else {
+        console.log(
+          "Popup: Successfully notified content script of popup open"
+        );
+
+        // After popup is opened, check storage and set hover state
+        chrome.storage.local.get(
+          ["lastMessage", "isHoveringEnabled"],
+          (result) => {
+            console.log("Popup: Retrieved from storage:", result);
+
+            // Set toggle state - default to true if not explicitly disabled
+            const isHoveringEnabled = result.isHoveringEnabled !== false;
+            toggle.checked = isHoveringEnabled;
+
+            if (isHoveringEnabled) {
+              enableHover();
+            } else {
+              disableHover();
+            }
+
+            // Handle stored messages
+            if (
+              result.lastMessage &&
+              (result.lastMessage.type === "XPATH_FOUND" ||
+                result.lastMessage.type === "XPATH_LOCKED" ||
+                result.lastMessage.type === "XPATH_SELECTED")
+            ) {
+              console.log("Popup: Found stored XPath data, displaying...");
+              const locked = result.lastMessage.type === "XPATH_LOCKED";
+              displayXPaths(
+                result.lastMessage.xpaths,
+                result.lastMessage.elementInfo,
+                locked
+              );
+
+              if (locked) {
+                isLocked = true;
+                status.textContent = "Element Locked";
+                status.className = "status active locked";
+                lockControls.style.display = "flex";
+              } else {
+                status.textContent = "Hover for XPath";
+                status.className = "status active";
+              }
+            } else {
+              console.log(
+                "Popup: No stored XPath data found, showing placeholder"
+              );
+              clearDisplay();
+            }
+          }
+        );
       }
     });
   } catch (error) {
@@ -44,49 +97,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let currentXPaths = [];
   let isLocked = false;
 
-  // 1. Immediately check local storage for the last saved XPath and toggle state
-  chrome.storage.local.get(["lastMessage", "isHoveringEnabled"], (result) => {
-    console.log("Popup: Retrieved from storage:", result);
-
-    // Set toggle state
-    const isHoveringEnabled = result.isHoveringEnabled !== false; // Default to true
-    toggle.checked = isHoveringEnabled;
-    if (isHoveringEnabled) {
-      enableHover();
-    } else {
-      disableHover();
-    }
-
-    if (
-      result.lastMessage &&
-      (result.lastMessage.type === "XPATH_FOUND" ||
-        result.lastMessage.type === "XPATH_LOCKED" ||
-        result.lastMessage.type === "XPATH_SELECTED")
-    ) {
-      console.log("Popup: Found stored XPath data, displaying...");
-      const locked = result.lastMessage.type === "XPATH_LOCKED";
-      displayXPaths(
-        result.lastMessage.xpaths,
-        result.lastMessage.elementInfo,
-        locked
-      );
-
-      if (locked) {
-        isLocked = true;
-        status.textContent = "Element Locked";
-        status.className = "status active locked";
-        lockControls.style.display = "flex";
-      } else {
-        status.textContent = "Hover for XPath";
-        status.className = "status active";
-      }
-    } else {
-      console.log("Popup: No stored XPath data found, showing placeholder");
-      clearDisplay();
-    }
-  });
-
-  // 2. Listen for real-time updates from background script while popup is open
+  // 1. Listen for real-time updates from background script while popup is open
   chrome.runtime.onMessage.addListener((message) => {
     console.log("Popup: Received message:", message);
     if (message.type === "XPATH_FOUND") {
@@ -169,7 +180,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const content = document.createElement("div");
       content.className = "xpath-content";
-      
+
       const textSpan = document.createElement("span");
       textSpan.className = "xpath-text-highlight";
       textSpan.textContent = option.xpath;
@@ -325,10 +336,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         active: true,
         currentWindow: true,
       });
-      chrome.tabs.sendMessage(tab.id, { type: "ENABLE_HOVER" });
+      chrome.tabs.sendMessage(tab.id, { type: "ENABLE_HOVER" }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error enabling hover:", chrome.runtime.lastError);
+        } else {
+          console.log("Popup: Successfully enabled hover in content script");
+        }
+      });
       chrome.storage.local.set({ isHoveringEnabled: true });
       status.textContent = "Hovering Enabled";
       status.className = "status active";
+      console.log("Popup: Hover enabled, toggle set to true");
     } catch (error) {
       console.error("Error enabling hover:", error);
     }
@@ -340,10 +358,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         active: true,
         currentWindow: true,
       });
-      chrome.tabs.sendMessage(tab.id, { type: "DISABLE_HOVER" });
+      chrome.tabs.sendMessage(tab.id, { type: "DISABLE_HOVER" }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error disabling hover:", chrome.runtime.lastError);
+        } else {
+          console.log("Popup: Successfully disabled hover in content script");
+        }
+      });
       chrome.storage.local.set({ isHoveringEnabled: false });
       status.textContent = "Hovering Disabled";
       status.className = "status";
+      console.log("Popup: Hover disabled, toggle set to false");
     } catch (error) {
       console.error("Error disabling hover:", error);
     }
