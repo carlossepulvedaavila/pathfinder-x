@@ -3,7 +3,13 @@
   "name": "Pathfinder-X",
   "version": "1.0",
   "description": "Finds the best XPath for any element on a webpage.",
-  "permissions": ["activeTab", "scripting", "contextMenus", "storage"],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "contextMenus",
+    "storage",
+    "webNavigation"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -23,7 +29,8 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"]
+      "js": ["content.js"],
+      "all_frames": true
     }
   ],
   "host_permissions": ["<all_urls>"]

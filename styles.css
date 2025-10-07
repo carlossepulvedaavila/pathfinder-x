@@ -111,6 +111,18 @@ body {
   letter-spacing: 1.1px;
 }
 
+.element-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: rgba(48, 30, 136, 0.85);
+  display: none;
+}
+
+.element-meta strong {
+  margin-right: 4px;
+}
+
 .xpath-option {
   background: white;
   background-color: #301e88;
@@ -248,6 +260,13 @@ body {
   color: #5c2b29;
   border-color: #d4d6d9;
   box-shadow: 0 3px 5px rgba(0, 0, 0, 0.25);
+}
+
+.validation.manual {
+  background-color: #ffeaa7;
+  color: #7a5210;
+  border-color: #ffe08a;
+  box-shadow: 0 3px 5px rgba(0, 0, 0, 0.2);
 }
 
 .clear-all {

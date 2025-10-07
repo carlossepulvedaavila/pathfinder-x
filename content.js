@@ -203,7 +203,7 @@ function generateXPathOptions(element) {
     // Add the optimized XPath
     const optimized = getOptimizedXPath(element);
     console.log("generateXPathOptions: Optimized XPath:", optimized);
-    options.push({ type: "Optimized", xpath: optimized });
+    options.push({ type: "Optimized", xpath: optimized, strategy: "xpath" });
 
     // Add alternative short XPaths
     const alternatives = generateAlternativeXPaths(element);
@@ -221,7 +221,11 @@ function generateXPathOptions(element) {
     const structural = getStructuralXPath(element);
     console.log("generateXPathOptions: Structural XPath:", structural);
     if (structural !== optimized && structural.split("/").length < 8) {
-      options.push({ type: "Structural", xpath: structural });
+      options.push({
+        type: "Structural",
+        xpath: structural,
+        strategy: "xpath",
+      });
     }
 
     // Add CSS selector equivalent if useful
@@ -229,18 +233,48 @@ function generateXPathOptions(element) {
       const cssSelector = getCSSSelector(element);
       console.log("generateXPathOptions: CSS Selector:", cssSelector);
       if (cssSelector && cssSelector.length < 100) {
-        options.push({ type: "CSS Selector", xpath: cssSelector });
+        options.push({
+          type: "CSS Selector",
+          xpath: cssSelector,
+          strategy: "css",
+        });
       }
     } catch (e) {
       console.log("generateXPathOptions: CSS selector generation failed:", e);
     }
 
     console.log("generateXPathOptions: Final options:", options);
-    return options.slice(0, 4); // Limit to 4 options for clean UI
+    const shadowLocator = buildShadowLocator(element);
+    if (
+      shadowLocator &&
+      !options.find((opt) => opt.type === "Shadow Locator")
+    ) {
+      options.push({
+        type: "Shadow Locator",
+        xpath: shadowLocator,
+        strategy: "shadow",
+      });
+    }
+
+    if (options.length > 5) {
+      const shadowOption = options.find((opt) => opt.strategy === "shadow");
+      if (shadowOption) {
+        const trimmed = options
+          .filter((opt) => opt.strategy !== "shadow")
+          .slice(0, 4);
+        trimmed.push(shadowOption);
+        return trimmed;
+      }
+      return options.slice(0, 5);
+    }
+
+    return options;
   } catch (error) {
     console.error("generateXPathOptions: Error generating XPaths:", error);
     // Return at least one option as fallback
-    return [{ type: "Basic", xpath: getStructuralXPath(element) }];
+    return [
+      { type: "Basic", xpath: getStructuralXPath(element), strategy: "xpath" },
+    ];
   }
 }
 
@@ -261,6 +295,7 @@ function generateAlternativeXPaths(element) {
       alternatives.push({
         type: `By ${attr}`,
         xpath: `//${element.tagName.toLowerCase()}[@${attr}="${value}"]`,
+        strategy: "xpath",
       });
       break; // Only add one attribute-based alternative
     }
@@ -278,6 +313,7 @@ function generateAlternativeXPaths(element) {
       alternatives.push({
         type: "By class",
         xpath: `//${element.tagName.toLowerCase()}[contains(@class,"${meaningfulClass}")]`,
+        strategy: "xpath",
       });
     }
   }
@@ -291,6 +327,7 @@ function generateAlternativeXPaths(element) {
       alternatives.push({
         type: "By text",
         xpath: `//${element.tagName.toLowerCase()}[contains(text(),"${text}")]`,
+        strategy: "xpath",
       });
     }
   }
@@ -306,6 +343,7 @@ function generateAlternativeXPaths(element) {
       alternatives.push({
         type: "By position",
         xpath: `(//${element.tagName.toLowerCase()})[${position}]`,
+        strategy: "xpath",
       });
     }
   }
@@ -351,6 +389,227 @@ function getCSSSelector(element) {
   return path.length > 0 ? path.join(" > ") : null;
 }
 
+function escapeSelector(selector) {
+  if (!selector) {
+    return "";
+  }
+  return selector.replace(/'/g, "\\'");
+}
+
+function buildShadowLocator(element) {
+  if (!element) {
+    return null;
+  }
+
+  const shadowCtor = typeof ShadowRoot !== "undefined" ? ShadowRoot : null;
+  const root = element.getRootNode();
+  if (!shadowCtor || !(root instanceof shadowCtor)) {
+    return null;
+  }
+
+  const chain = [];
+  let current = element;
+  let currentRoot = root;
+
+  const targetSelector = getCSSSelector(current);
+  if (!targetSelector) {
+    return null;
+  }
+
+  chain.unshift({ selector: targetSelector, type: "element" });
+
+  while (shadowCtor && currentRoot instanceof shadowCtor) {
+    const host = currentRoot.host;
+    if (!host) {
+      break;
+    }
+
+    const hostSelector = getCSSSelector(host);
+    if (!hostSelector) {
+      return null;
+    }
+
+    chain.unshift({ selector: hostSelector, type: "host" });
+    current = host;
+    currentRoot = host.getRootNode();
+  }
+
+  let expression = "document";
+
+  chain.forEach((step, index) => {
+    const normalized = escapeSelector(step.selector);
+    expression += `.querySelector('${normalized}')`;
+    if (index !== chain.length - 1) {
+      expression += ".shadowRoot";
+    }
+  });
+
+  return expression;
+}
+
+function buildShadowContext(element) {
+  if (!element) {
+    return null;
+  }
+
+  const shadowCtor = typeof ShadowRoot !== "undefined" ? ShadowRoot : null;
+  const root = element.getRootNode();
+  if (!shadowCtor || !(root instanceof shadowCtor)) {
+    return null;
+  }
+
+  const hosts = [];
+  let current = element;
+  let currentRoot = root;
+
+  while (shadowCtor && currentRoot instanceof shadowCtor) {
+    const host = currentRoot.host;
+    if (!host) {
+      break;
+    }
+
+    const hostSelector = getCSSSelector(host);
+    hosts.unshift({
+      tagName: host.tagName,
+      selector: hostSelector || host.tagName.toLowerCase(),
+    });
+
+    current = host;
+    currentRoot = host.getRootNode();
+  }
+
+  const locator = buildShadowLocator(element);
+
+  return {
+    depth: hosts.length,
+    hosts,
+    locator,
+    targetSelector: getCSSSelector(element),
+  };
+}
+
+function describeFrameElement(frameEl) {
+  if (!frameEl) {
+    return null;
+  }
+
+  if (frameEl.id) {
+    return `#${CSS.escape(frameEl.id)}`;
+  }
+
+  if (frameEl.name) {
+    return `${frameEl.tagName.toLowerCase()}[name="${frameEl.name}"]`;
+  }
+
+  const src = frameEl.getAttribute("src");
+  if (src) {
+    return `${frameEl.tagName.toLowerCase()}[src="${src}"]`;
+  }
+
+  const parent = frameEl.parentElement;
+  if (parent) {
+    const siblings = Array.from(parent.children).filter(
+      (child) => child.tagName === frameEl.tagName
+    );
+    const index = siblings.indexOf(frameEl) + 1;
+    return `${frameEl.tagName.toLowerCase()}:nth-of-type(${index})`;
+  }
+
+  return frameEl.tagName.toLowerCase();
+}
+
+function getFrameMetadata() {
+  const isTopFrame = window.top === window;
+  const selectors = [];
+
+  if (!isTopFrame) {
+    let currentWindow = window;
+
+    while (true) {
+      let parentWindow;
+      try {
+        parentWindow = currentWindow.parent;
+      } catch (error) {
+        selectors.unshift("<cross-origin-parent>");
+        break;
+      }
+
+      if (!parentWindow || parentWindow === currentWindow) {
+        break;
+      }
+
+      try {
+        const frameElement = currentWindow.frameElement;
+        const descriptor = describeFrameElement(frameElement);
+        if (descriptor) {
+          selectors.unshift(descriptor);
+        }
+        currentWindow = parentWindow;
+      } catch (error) {
+        selectors.unshift("<cross-origin-parent>");
+        break;
+      }
+
+      if (currentWindow === window.top) {
+        break;
+      }
+    }
+  }
+
+  return {
+    isTopFrame,
+    url: window.location.href,
+    origin: window.location.origin,
+    selectors,
+  };
+}
+
+function buildElementInfo(element, context) {
+  return {
+    tagName: element?.tagName || "",
+    id: element?.id || "",
+    className: element?.className || "",
+    textContent: element?.textContent
+      ? element.textContent.trim().substring(0, 50)
+      : "",
+    frameUrl: context?.frame?.url || "",
+    frameOrigin: context?.frame?.origin || "",
+    frameSelectors: context?.frame?.selectors || [],
+    shadowDepth: context?.shadow?.depth || 0,
+    shadowTrail: context?.shadow?.hosts || [],
+  };
+}
+
+function buildContext(element) {
+  const frame = getFrameMetadata();
+  const shadow = buildShadowContext(element);
+
+  return { frame, shadow };
+}
+
+function gatherSelectionData(element) {
+  const xpaths = generateXPathOptions(element);
+  const context = buildContext(element);
+  const elementInfo = buildElementInfo(element, context);
+
+  return {
+    xpaths,
+    context,
+    elementInfo,
+  };
+}
+
+function getComposedPathTarget(event) {
+  const path = event.composedPath?.();
+  if (Array.isArray(path)) {
+    const firstElement = path.find((node) => node instanceof Element);
+    if (firstElement) {
+      return firstElement;
+    }
+  }
+  return event.target instanceof Element ? event.target : null;
+}
+
 // Visual highlighting and performance optimization
 let highlightedElement = null;
 let lastElement = null;
@@ -362,6 +621,7 @@ let isLocked = false; // Track if element is locked
 let isPopupOpen = false; // Track if popup is open
 let hoverEnabled = false; // Track if hover detection should be active
 let listenersAttached = false; // Track if hover listeners are attached
+let hoverPreference = true; // Track desired hover state from popup toggle
 
 // Cleanup function to remove event listeners and highlights
 function cleanup() {
@@ -468,7 +728,11 @@ function handleMouseOver(event) {
     return;
   }
 
-  const element = event.target;
+  const element = getComposedPathTarget(event);
+
+  if (!element) {
+    return;
+  }
 
   // Skip if same element or if it's our highlight overlay
   if (element === lastElement || element.id === "pathfinder-x-highlight") {
@@ -488,25 +752,19 @@ function handleMouseOver(event) {
 
   throttleTimeout = setTimeout(() => {
     console.log("Content script: Generating XPath for element:", element);
-    const xpathOptions = generateXPathOptions(element);
-    console.log("Content script generated XPaths:", xpathOptions);
+    const payload = gatherSelectionData(element);
+    console.log("Content script generated payload:", payload);
 
-    if (!xpathOptions || xpathOptions.length === 0) {
+    if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
       console.error("Content script: No XPath options generated!");
       return;
     }
 
     const message = {
       type: "XPATH_FOUND",
-      xpaths: xpathOptions,
-      elementInfo: {
-        tagName: element.tagName,
-        id: element.id,
-        className: element.className,
-        textContent: element.textContent
-          ? element.textContent.trim().substring(0, 50)
-          : "",
-      },
+      xpaths: payload.xpaths,
+      elementInfo: payload.elementInfo,
+      context: payload.context,
     };
 
     console.log("Content script sending message:", message);
@@ -582,7 +840,11 @@ function handleClick(event) {
     return;
   }
 
-  const element = event.target;
+  const element = getComposedPathTarget(event);
+
+  if (!element) {
+    return;
+  }
 
   // Skip if clicking on certain elements
   if (
@@ -608,20 +870,17 @@ function lockElement(element) {
 
   isLocked = true;
   lockedElement = element;
+  hoverEnabled = false;
 
   // Highlight the locked element
   highlightElement(lockedElement);
   updateHighlightStyle(true); // Use locked style
 
-  // Generate XPath options for the locked element
-  const xpathOptions = generateXPathOptions(lockedElement);
+  const payload = gatherSelectionData(lockedElement);
   console.log("Content script: Element locked", lockedElement);
-  console.log(
-    "Content script generated XPaths for locked element:",
-    xpathOptions
-  );
+  console.log("Content script generated payload for locked element:", payload);
 
-  if (!xpathOptions || xpathOptions.length === 0) {
+  if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
     console.error(
       "Content script: No XPath options generated for locked element!"
     );
@@ -630,15 +889,9 @@ function lockElement(element) {
 
   const message = {
     type: "XPATH_LOCKED",
-    xpaths: xpathOptions,
-    elementInfo: {
-      tagName: lockedElement.tagName,
-      id: lockedElement.id,
-      className: lockedElement.className,
-      textContent: lockedElement.textContent
-        ? lockedElement.textContent.trim().substring(0, 50)
-        : "",
-    },
+    xpaths: payload.xpaths,
+    elementInfo: payload.elementInfo,
+    context: payload.context,
   };
 
   console.log("Content script sending locked message:", message);
@@ -654,6 +907,12 @@ function lockElement(element) {
   } catch (error) {
     console.log("Exception sending locked message:", error);
     cleanup();
+  }
+
+  try {
+    chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: true });
+  } catch (error) {
+    console.log("Content script: Failed to sync lock state", error);
   }
 }
 
@@ -693,8 +952,14 @@ function unlockElement() {
   }
 
   // Re-enable hover detection
-  hoverEnabled = true;
+  hoverEnabled = hoverPreference;
   console.log("Content script: Element unlocked, hover detection re-enabled");
+
+  try {
+    chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: false });
+  } catch (error) {
+    console.log("Content script: Failed to broadcast unlock state", error);
+  }
 }
 
 // Listen for messages from popup
@@ -705,7 +970,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.type === "POPUP_OPENED") {
     isPopupOpen = true;
     // Enable hover by default when popup opens (will be disabled if toggle is off)
-    hoverEnabled = true;
+    hoverEnabled = hoverPreference && !isLocked;
     attachHoverListeners();
     console.log(
       "Content script: Popup opened, listeners attached, hover enabled"
@@ -723,14 +988,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("Content script: Popup closed, hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "ENABLE_HOVER") {
-    hoverEnabled = true;
+    hoverPreference = true;
+    if (!isLocked) {
+      hoverEnabled = true;
+    }
     console.log("Content script: Hover detection enabled");
     sendResponse({ success: true });
   } else if (message.type === "DISABLE_HOVER") {
+    hoverPreference = false;
     hoverEnabled = false;
     removeHighlight();
     lastElement = null;
     console.log("Content script: Hover detection disabled");
+    sendResponse({ success: true });
+  } else if (message.type === "LOCK_STATE_SYNC") {
+    if (message.locked) {
+      isLocked = true;
+      hoverEnabled = false;
+      if (!lockedElement) {
+        removeHighlight();
+      }
+    } else {
+      isLocked = false;
+      if (!lockedElement) {
+        hoverEnabled = hoverPreference;
+      }
+    }
     sendResponse({ success: true });
   }
 });
