@@ -1022,14 +1022,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (initializeContentScript()) {
   // Do NOT attach hover listeners yet; wait for popup to open
 
-  // Clean up on page unload
-  window.addEventListener("beforeunload", () => {
+  const canUseUnloadHandlers =
+    typeof window.fence === "undefined" &&
+    !(document && document.fencedframeElement);
+
+  const handleUnload = () => {
     removeHighlight();
     if (throttleTimeout) {
       clearTimeout(throttleTimeout);
     }
     detachHoverListeners();
-  });
+  };
+
+  if (canUseUnloadHandlers) {
+    window.addEventListener("beforeunload", handleUnload);
+    window.addEventListener("unload", handleUnload);
+  } else {
+    console.log(
+      "Pathfinder-X: Skipping unload handlers due to fenced frame restrictions"
+    );
+  }
 
   console.log(
     "Pathfinder-X: Base content script setup complete; listeners will attach when popup opens"
