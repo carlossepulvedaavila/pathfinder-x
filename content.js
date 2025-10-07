@@ -610,6 +610,349 @@ function getComposedPathTarget(event) {
   return event.target instanceof Element ? event.target : null;
 }
 
+function escapeForXPathLiteral(value) {
+  if (value == null) {
+    return "";
+  }
+
+  if (!value.includes("'")) {
+    return `'${value}'`;
+  }
+
+  if (!value.includes('"')) {
+    return `"${value}"`;
+  }
+
+  const parts = value.split('"').map((part) => `"${part}"`);
+  const joined = parts.join(", '"', ");
+  return `concat(${joined})`;
+}
+
+function getSiblingIndex(element) {
+  if (!element || !element.parentElement) {
+    return 1;
+  }
+  const siblings = Array.from(element.parentElement.children).filter(
+    (child) => child.tagName === element.tagName
+  );
+  return siblings.indexOf(element) + 1;
+}
+
+function buildElementPredicate(element) {
+  if (!element) {
+    return null;
+  }
+
+  if (
+    element.id &&
+    document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1
+  ) {
+    return `@id=${escapeForXPathLiteral(element.id)}`;
+  }
+
+  const testAttributes = [
+    "data-testid",
+    "data-test",
+    "data-cy",
+    "data-qa",
+    "name",
+    "type",
+    "aria-label",
+    "title",
+    "alt",
+    "placeholder",
+  ];
+
+  for (const attr of testAttributes) {
+    const value = element.getAttribute(attr);
+    if (value) {
+      const selector = `[${attr}="${CSS.escape(value)}"]`;
+      try {
+        if (document.querySelectorAll(selector).length === 1) {
+          return `@${attr}=${escapeForXPathLiteral(value)}`;
+        }
+      } catch (error) {
+        // Ignore selector errors and continue
+      }
+    }
+  }
+
+  const textContent = element.textContent?.trim();
+  if (textContent && textContent.length >= 3 && textContent.length <= 40) {
+    const normalized = textContent.replace(/\s+/g, " ");
+    return `contains(normalize-space(.), ${escapeForXPathLiteral(normalized)})`;
+  }
+
+  if (element.className && typeof element.className === "string") {
+    const classes = element.className.trim().split(/\s+/).filter(Boolean);
+    const meaningful = classes.find(
+      (cls) =>
+        cls.length > 3 &&
+        !cls.match(/^(d-|flex-|text-|bg-|border-|p-|m-|col-|row-)/)
+    );
+    if (meaningful) {
+      return `contains(@class, ${escapeForXPathLiteral(meaningful)})`;
+    }
+  }
+
+  if (element.parentElement) {
+    const index = getSiblingIndex(element);
+    if (index > 0) {
+      return `position()=${index}`;
+    }
+  }
+
+  return null;
+}
+
+function buildStructuralPathFromAncestor(ancestor, descendant) {
+  if (!ancestor || !descendant) {
+    return "";
+  }
+  const segments = [];
+  let current = descendant;
+
+  while (current && current !== ancestor) {
+    const parent = current.parentElement;
+    if (!parent) {
+      break;
+    }
+
+    let segment = `/${current.tagName.toLowerCase()}`;
+    const siblings = Array.from(parent.children).filter(
+      (child) => child.tagName === current.tagName
+    );
+    if (siblings.length > 1) {
+      segment += `[${siblings.indexOf(current) + 1}]`;
+    }
+
+    segments.unshift(segment);
+    current = parent;
+  }
+
+  return segments.join("");
+}
+
+function generateRelationOptions(anchorElement, targetElement, anchorData, targetData) {
+  if (!anchorElement || !targetElement) {
+    return [];
+  }
+
+  const optionsMap = new Map();
+  const anchorPrimary =
+    anchorData?.xpaths?.[0]?.xpath || getStructuralXPath(anchorElement);
+  const targetPrimary =
+    targetData?.xpaths?.[0]?.xpath || getStructuralXPath(targetElement);
+
+  if (!anchorPrimary) {
+    return [];
+  }
+
+  const predicate = buildElementPredicate(targetElement);
+  const predicateSuffix = predicate ? `[${predicate}]` : "";
+  const targetTag = targetElement.tagName.toLowerCase();
+
+  const addOption = (type, axisExpression, note = "") => {
+    if (!axisExpression) {
+      return;
+    }
+    const xpath = `(${anchorPrimary})${axisExpression}`.replace(/\s+/g, " ").trim();
+    if (!optionsMap.has(xpath)) {
+      optionsMap.set(xpath, {
+        type,
+        xpath,
+        note,
+        strategy: "xpath",
+      });
+    }
+  };
+
+  if (anchorElement.contains(targetElement)) {
+    if (predicateSuffix) {
+      addOption(
+        "Descendant",
+        `//${targetTag}${predicateSuffix}`,
+        "Target is inside the anchor subtree"
+      );
+    }
+    const structural = buildStructuralPathFromAncestor(anchorElement, targetElement);
+    if (structural) {
+      addOption(
+        "Descendant structural",
+        structural,
+        "Precise structural path from anchor to target"
+      );
+    }
+  }
+
+  if (targetElement.contains(anchorElement)) {
+    addOption(
+      "Ancestor",
+      `/ancestor::${targetTag}${predicateSuffix}`,
+      "Target wraps the anchor element"
+    );
+  }
+
+  const anchorParent = anchorElement.parentElement;
+  const targetParent = targetElement.parentElement;
+  if (anchorParent && anchorParent === targetParent) {
+    const anchorIndex = getSiblingIndex(anchorElement);
+    const targetIndex = getSiblingIndex(targetElement);
+    const siblingPredicate = predicateSuffix || `[position()=${targetIndex}]`;
+
+    if (targetIndex < anchorIndex) {
+      addOption(
+        "Preceding sibling",
+        `/preceding-sibling::${targetTag}${siblingPredicate}`,
+        "Target is a preceding sibling of anchor"
+      );
+    } else if (targetIndex > anchorIndex) {
+      addOption(
+        "Following sibling",
+        `/following-sibling::${targetTag}${siblingPredicate}`,
+        "Target is a following sibling of anchor"
+      );
+    }
+  }
+
+  const position = anchorElement.compareDocumentPosition(targetElement);
+  if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+    addOption(
+      "Following",
+      `/following::${targetTag}${predicateSuffix}`,
+      "Target appears after anchor in document flow"
+    );
+  }
+  if (position & Node.DOCUMENT_POSITION_PRECEDING) {
+    addOption(
+      "Preceding",
+      `/preceding::${targetTag}${predicateSuffix}`,
+      "Target appears before anchor in document flow"
+    );
+  }
+
+  if (predicateSuffix) {
+    addOption(
+      "Ancestor search",
+      `/ancestor-or-self::*//${targetTag}${predicateSuffix}`,
+      "Search anchor and its ancestors for the target"
+    );
+  }
+
+  if (optionsMap.size === 0 && targetPrimary) {
+    optionsMap.set(targetPrimary, {
+      type: "Target selector",
+      xpath: targetPrimary,
+      note: "Fallback to direct target selector",
+      strategy: "xpath",
+    });
+  }
+
+  return Array.from(optionsMap.values()).slice(0, 6);
+}
+
+function buildRelationStatePayload() {
+  return {
+    mode: interactionMode,
+    anchor: relationState.anchorData,
+    target: relationState.targetData,
+    relations: relationState.relations,
+  };
+}
+
+function broadcastRelationState() {
+  const state = buildRelationStatePayload();
+  try {
+    chrome.runtime.sendMessage({
+      type: "RELATION_STATE_UPDATE",
+      state,
+    });
+  } catch (error) {
+    console.log("Content script: Failed to broadcast relation state", error);
+  }
+}
+
+function clearRelationSelection(notify = true) {
+  relationState.anchorElement = null;
+  relationState.targetElement = null;
+  relationState.anchorData = null;
+  relationState.targetData = null;
+  relationState.relations = [];
+  hideAnchorHighlight();
+  hideTargetHighlight();
+  removeHighlight();
+  if (notify) {
+    broadcastRelationState();
+  }
+}
+
+function setRelationAnchor(element) {
+  relationState.anchorElement = element;
+  relationState.targetElement = null;
+  relationState.anchorData = gatherSelectionData(element);
+  relationState.targetData = null;
+  relationState.relations = [];
+  showAnchorHighlight(element);
+  hideTargetHighlight();
+  removeHighlight();
+  broadcastRelationState();
+}
+
+function setRelationTarget(element) {
+  relationState.targetElement = element;
+  relationState.targetData = gatherSelectionData(element);
+  relationState.relations = generateRelationOptions(
+    relationState.anchorElement,
+    element,
+    relationState.anchorData,
+    relationState.targetData
+  );
+  showTargetHighlight(element);
+  broadcastRelationState();
+}
+
+function handleRelationClick(element) {
+  if (!relationState.anchorElement) {
+    setRelationAnchor(element);
+    return;
+  }
+
+  if (!relationState.targetElement) {
+    if (relationState.anchorElement === element) {
+      return;
+    }
+    setRelationTarget(element);
+    return;
+  }
+
+  if (relationState.anchorElement === element) {
+    return;
+  }
+
+  setRelationTarget(element);
+}
+
+function setInteractionMode(mode) {
+  const normalized =
+    mode === InteractionModes.RELATION
+      ? InteractionModes.RELATION
+      : InteractionModes.STANDARD;
+
+  const previousMode = interactionMode;
+  interactionMode = normalized;
+  hoverEnabled = hoverPreference && !isLocked;
+
+  if (normalized === InteractionModes.STANDARD) {
+    if (previousMode === InteractionModes.RELATION) {
+      clearRelationSelection(true);
+    }
+  } else {
+    if (previousMode === InteractionModes.STANDARD) {
+      removeHighlight();
+    }
+  }
+}
+
 // Visual highlighting and performance optimization
 let highlightedElement = null;
 let lastElement = null;
@@ -623,9 +966,27 @@ let hoverEnabled = false; // Track if hover detection should be active
 let listenersAttached = false; // Track if hover listeners are attached
 let hoverPreference = true; // Track desired hover state from popup toggle
 
+const InteractionModes = {
+  STANDARD: "standard",
+  RELATION: "relation",
+};
+
+let interactionMode = InteractionModes.STANDARD;
+
+const relationState = {
+  anchorElement: null,
+  targetElement: null,
+  anchorData: null,
+  targetData: null,
+  relations: [],
+  anchorOverlay: null,
+  targetOverlay: null,
+};
+
 // Cleanup function to remove event listeners and highlights
 function cleanup() {
   isExtensionValid = false;
+  clearRelationSelection(false);
   removeHighlight();
 
   if (throttleTimeout) {
@@ -679,6 +1040,107 @@ function createHighlightOverlay() {
   return overlay;
 }
 
+function positionOverlay(overlay, element) {
+  if (!overlay || !element) {
+    return;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+  overlay.style.top = rect.top + scrollTop + "px";
+  overlay.style.left = rect.left + scrollLeft + "px";
+  overlay.style.width = rect.width + "px";
+  overlay.style.height = rect.height + "px";
+  overlay.style.display = "block";
+}
+
+function ensureAnchorOverlay() {
+  if (relationState.anchorOverlay && document.body.contains(relationState.anchorOverlay)) {
+    return relationState.anchorOverlay;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.id = "pathfinder-x-anchor-highlight";
+  overlay.style.cssText = `
+    position: absolute;
+    background: rgba(63, 81, 181, 0.2);
+    border: 2px dashed #3f51b5;
+    pointer-events: none;
+    z-index: 999998;
+    box-sizing: border-box;
+    transition: all 0.1s ease;
+  `;
+  document.body.appendChild(overlay);
+  relationState.anchorOverlay = overlay;
+  return overlay;
+}
+
+function updateAnchorOverlayPosition() {
+  if (relationState.anchorElement && relationState.anchorOverlay) {
+    positionOverlay(relationState.anchorOverlay, relationState.anchorElement);
+  }
+}
+
+function showAnchorHighlight(element) {
+  const overlay = ensureAnchorOverlay();
+  positionOverlay(overlay, element);
+}
+
+function hideAnchorHighlight() {
+  if (relationState.anchorOverlay) {
+    relationState.anchorOverlay.style.display = "none";
+  }
+}
+
+function ensureTargetOverlay() {
+  if (relationState.targetOverlay && document.body.contains(relationState.targetOverlay)) {
+    return relationState.targetOverlay;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.id = "pathfinder-x-target-highlight";
+  overlay.style.cssText = `
+    position: absolute;
+    background: rgba(0, 150, 136, 0.18);
+    border: 2px solid #009688;
+    pointer-events: none;
+    z-index: 999997;
+    box-sizing: border-box;
+    transition: all 0.1s ease;
+  `;
+  document.body.appendChild(overlay);
+  relationState.targetOverlay = overlay;
+  return overlay;
+}
+
+function updateTargetOverlayPosition() {
+  if (relationState.targetElement && relationState.targetOverlay) {
+    positionOverlay(relationState.targetOverlay, relationState.targetElement);
+  }
+}
+
+function showTargetHighlight(element) {
+  const overlay = ensureTargetOverlay();
+  positionOverlay(overlay, element);
+}
+
+function hideTargetHighlight() {
+  if (relationState.targetOverlay) {
+    relationState.targetOverlay.style.display = "none";
+  }
+}
+
+window.addEventListener("scroll", () => {
+  updateAnchorOverlayPosition();
+  updateTargetOverlayPosition();
+}, true);
+window.addEventListener("resize", () => {
+  updateAnchorOverlayPosition();
+  updateTargetOverlayPosition();
+});
+
 function updateHighlightStyle(locked = false) {
   if (highlightedElement) {
     if (locked) {
@@ -698,15 +1160,7 @@ function highlightElement(element) {
     highlightedElement = createHighlightOverlay();
   }
 
-  const rect = element.getBoundingClientRect();
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-
-  highlightedElement.style.top = rect.top + scrollTop + "px";
-  highlightedElement.style.left = rect.left + scrollLeft + "px";
-  highlightedElement.style.width = rect.width + "px";
-  highlightedElement.style.height = rect.height + "px";
-  highlightedElement.style.display = "block";
+  positionOverlay(highlightedElement, element);
 }
 
 function removeHighlight() {
@@ -836,7 +1290,7 @@ function handleClick(event) {
   }
 
   // Only process click events if popup is open and hover is enabled
-  if (!isPopupOpen || !hoverEnabled) {
+  if (!isPopupOpen || (!hoverEnabled && interactionMode !== InteractionModes.RELATION)) {
     return;
   }
 
@@ -859,6 +1313,11 @@ function handleClick(event) {
   // Prevent default action and stop propagation to avoid interfering with page
   event.preventDefault();
   event.stopPropagation();
+
+  if (interactionMode === InteractionModes.RELATION) {
+    handleRelationClick(element);
+    return;
+  }
 
   // Lock the element
   lockElement(element);
@@ -921,6 +1380,10 @@ function handleKeyDown(event) {
   // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
+    return;
+  }
+
+  if (interactionMode === InteractionModes.RELATION) {
     return;
   }
 
@@ -988,6 +1451,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("Content script: Popup closed, hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "ENABLE_HOVER") {
+    isPopupOpen = true;
+    if (!listenersAttached) {
+      attachHoverListeners();
+    }
     hoverPreference = true;
     if (!isLocked) {
       hoverEnabled = true;
@@ -995,6 +1462,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("Content script: Hover detection enabled");
     sendResponse({ success: true });
   } else if (message.type === "DISABLE_HOVER") {
+    isPopupOpen = true;
     hoverPreference = false;
     hoverEnabled = false;
     removeHighlight();
@@ -1014,6 +1482,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         hoverEnabled = hoverPreference;
       }
     }
+    sendResponse({ success: true });
+  } else if (message.type === "SET_INTERACTION_MODE") {
+    setInteractionMode(message.mode);
+    sendResponse({ success: true });
+  } else if (message.type === "RELATION_CLEAR") {
+    clearRelationSelection(true);
     sendResponse({ success: true });
   }
 });

@@ -99,6 +99,37 @@ body {
   background-color: #f4f4f6;
 }
 
+.mode-switch {
+  display: flex;
+  gap: 6px;
+  margin: 0 6px 10px 6px;
+}
+
+.mode-btn {
+  flex: 1 1 50%;
+  border: none;
+  background: #e0e0e7;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 12px;
+  color: #301e88;
+  letter-spacing: 0.8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mode-btn:hover,
+.mode-btn:focus {
+  background: #d3d3ea;
+}
+
+.mode-btn.active {
+  background: #301e88;
+  color: #ffffff;
+  box-shadow: 0 3px 6px rgba(48, 30, 136, 0.35);
+}
+
 .element-info {
   background: #e8e8e8;
   margin: 6px;
@@ -121,6 +152,59 @@ body {
 
 .element-meta strong {
   margin-right: 4px;
+}
+
+.relation-status {
+  margin: 0 6px 10px 6px;
+  background: #eef2ff;
+  border: 1px solid #cdd8ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #233a7e;
+  letter-spacing: 0.6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12);
+}
+
+.relation-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 6px 12px 6px;
+}
+
+.relation-card {
+  flex: 1 1 48%;
+  background: #ffffff;
+  border-radius: 10px;
+  border: 1px solid #dfe1f2;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.12);
+  padding: 10px;
+  min-width: 150px;
+}
+
+.relation-card h4 {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: #301e88;
+  letter-spacing: 1px;
+}
+
+.relation-card-body > div {
+  font-size: 11px;
+  margin-bottom: 4px;
+  color: #2c2b45;
+}
+
+.relation-xpath-list {
+  margin: 0 6px;
+}
+
+.relation-note {
+  font-size: 10px;
+  color: #5a6270;
+  margin-top: 4px;
 }
 
 .xpath-option {

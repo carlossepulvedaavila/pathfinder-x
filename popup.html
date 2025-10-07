@@ -33,6 +33,14 @@
       </div>
 
       <div class="modal__content">
+        <div class="mode-switch">
+          <button class="mode-btn active" id="singleModeBtn">
+            Single Element
+          </button>
+          <button class="mode-btn" id="relationModeBtn">Relation</button>
+        </div>
+
+        <div id="singleModeView">
         <div class="lock-controls" id="lockControls" style="display: none">
           <div class="lock-status">
             <span>Element Locked</span>
@@ -69,6 +77,81 @@
         <button class="clear-all" id="clearButton" style="display: none">
           CLEAR ALL
         </button>
+        </div>
+
+        <div id="relationModeView" style="display: none">
+          <div class="relation-status" id="relationStatus">
+            Select an anchor element to begin building a relational XPath.
+          </div>
+
+          <div class="relation-cards">
+            <div class="relation-card">
+              <h4>Anchor</h4>
+              <div class="relation-card-body">
+                <div><strong>Element:</strong> <span id="relationAnchorTag">None</span></div>
+                <div><strong>Text:</strong> <span id="relationAnchorText">None</span></div>
+                <div
+                  id="relationAnchorFrameRow"
+                  class="element-meta"
+                  style="display: none"
+                >
+                  <strong>Frame:</strong> <span id="relationAnchorFrame"></span>
+                </div>
+                <div
+                  id="relationAnchorShadowRow"
+                  class="element-meta"
+                  style="display: none"
+                >
+                  <strong>Shadow:</strong> <span id="relationAnchorShadow"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="relation-card">
+              <h4>Target</h4>
+              <div class="relation-card-body">
+                <div><strong>Element:</strong> <span id="relationTargetTag">None</span></div>
+                <div><strong>Text:</strong> <span id="relationTargetText">None</span></div>
+                <div
+                  id="relationTargetFrameRow"
+                  class="element-meta"
+                  style="display: none"
+                >
+                  <strong>Frame:</strong> <span id="relationTargetFrame"></span>
+                </div>
+                <div
+                  id="relationTargetShadowRow"
+                  class="element-meta"
+                  style="display: none"
+                >
+                  <strong>Shadow:</strong> <span id="relationTargetShadow"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="relationXPathContainer" class="relation-xpath-list">
+            <div class="placeholder">
+              <img
+                class="placeholder__icon"
+                src="./images/hover-icon.png"
+                alt="Relation Icon"
+              />
+              <p>
+                <strong>Anchor selected?</strong><br />
+                Hover and click a second element to generate relational selectors.
+              </p>
+            </div>
+          </div>
+
+          <button
+            class="clear-all"
+            id="relationClearButton"
+            style="display: none"
+          >
+            CLEAR RELATION
+          </button>
+        </div>
       </div>
     </main>
 

@@ -10,8 +10,8 @@
 
 ## Build, Test, and Development Commands
 - No bundler is required. Edit files directly and reload the unpacked extension to see changes.
-- Load locally via `chrome://extensions` → enable Developer Mode → **Load unpacked** → repository root.
-- Inspect background events with Chrome DevTools → **Service Worker** and debug the popup via **Inspect views** > `popup.html`.
+- Load locally via `chrome://extensions` -> enable Developer Mode -> **Load unpacked** -> repository root.
+- Inspect background events with Chrome DevTools -> **Service Worker** and debug the popup via **Inspect views** > `popup.html`.
 - Package for release with `mkdir -p dist && zip -r dist/pathfinder-x.zip . -x ".git/*" "dist/*"` from repo root.
 
 ## Coding Style & Naming Conventions

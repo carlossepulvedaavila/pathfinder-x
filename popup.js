@@ -14,6 +14,39 @@ document.addEventListener("DOMContentLoaded", async () => {
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
   const toggle = document.getElementById("toggle");
+  const singleModeBtn = document.getElementById("singleModeBtn");
+  const relationModeBtn = document.getElementById("relationModeBtn");
+  const singleModeView = document.getElementById("singleModeView");
+  const relationModeView = document.getElementById("relationModeView");
+  const relationStatus = document.getElementById("relationStatus");
+  const relationAnchorTag = document.getElementById("relationAnchorTag");
+  const relationAnchorText = document.getElementById("relationAnchorText");
+  const relationAnchorFrameRow = document.getElementById(
+    "relationAnchorFrameRow"
+  );
+  const relationAnchorFrame = document.getElementById("relationAnchorFrame");
+  const relationAnchorShadowRow = document.getElementById(
+    "relationAnchorShadowRow"
+  );
+  const relationAnchorShadow = document.getElementById(
+    "relationAnchorShadow"
+  );
+  const relationTargetTag = document.getElementById("relationTargetTag");
+  const relationTargetText = document.getElementById("relationTargetText");
+  const relationTargetFrameRow = document.getElementById(
+    "relationTargetFrameRow"
+  );
+  const relationTargetFrame = document.getElementById("relationTargetFrame");
+  const relationTargetShadowRow = document.getElementById(
+    "relationTargetShadowRow"
+  );
+  const relationTargetShadow = document.getElementById(
+    "relationTargetShadow"
+  );
+  const relationXPathContainer = document.getElementById(
+    "relationXPathContainer"
+  );
+  const relationClearButton = document.getElementById("relationClearButton");
 
   async function getActiveTab() {
     const [tab] = await chrome.tabs.query({
@@ -84,7 +117,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // After popup is opened, check storage and set hover state
     chrome.storage.local.get(
-      ["lastMessage", "isHoveringEnabled"],
+      [
+        "lastMessage",
+        "isHoveringEnabled",
+        "interactionMode",
+        "relationState",
+      ],
       (result) => {
         console.log("Popup: Retrieved from storage:", result);
 
@@ -131,6 +169,17 @@ document.addEventListener("DOMContentLoaded", async () => {
           console.log("Popup: No stored XPath data found, showing placeholder");
           clearDisplay();
         }
+
+        const storedMode = result.interactionMode || "standard";
+        switchInteractionMode(storedMode, { broadcast: true }).catch((error) =>
+          console.error("Popup: Failed to apply stored mode", error)
+        );
+
+        if (result.relationState) {
+          renderRelationState(result.relationState);
+        } else {
+          resetRelationView();
+        }
       }
     );
   } catch (error) {
@@ -147,15 +196,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     lockControls: !!lockControls,
     unlockButton: !!unlockButton,
     toggle: !!toggle,
+    singleModeBtn: !!singleModeBtn,
+    relationModeBtn: !!relationModeBtn,
   });
 
   let currentXPaths = [];
   let currentContext = null;
   let isLocked = false;
+  let interactionMode = "standard";
+  let relationState = {
+    anchor: null,
+    target: null,
+    relations: [],
+  };
 
   // 1. Listen for real-time updates from background script while popup is open
   chrome.runtime.onMessage.addListener((message) => {
     console.log("Popup: Received message:", message);
+    if (message.type === "RELATION_STATE_UPDATE") {
+      renderRelationState(message.state);
+      return;
+    }
     if (message.type === "XPATH_FOUND") {
       console.log("Popup: Processing XPATH_FOUND message");
       if (!isLocked) {
@@ -190,6 +251,45 @@ document.addEventListener("DOMContentLoaded", async () => {
       clearDisplay();
     }
   });
+
+  function summarizeFrameContext(frame) {
+    if (!frame) {
+      return null;
+    }
+
+    if (frame.isTopFrame) {
+      return "Top frame";
+    }
+
+    const selectors = (frame.selectors || []).join(" -> ");
+    let origin = frame.origin || "";
+    if (!origin && frame.url) {
+      try {
+        origin = new URL(frame.url).origin;
+      } catch (error) {
+        origin = frame.url;
+      }
+    }
+
+    const parts = [origin, selectors].filter(Boolean);
+    return parts.join(" | ") || "Nested frame";
+  }
+
+  function summarizeShadowContext(shadow) {
+    if (!shadow || shadow.depth === 0) {
+      return null;
+    }
+
+    const hostSelectors = (shadow.hosts || [])
+      .map((host) => host.selector || host.tagName?.toLowerCase())
+      .filter(Boolean);
+
+    if (shadow.targetSelector) {
+      hostSelectors.push(shadow.targetSelector);
+    }
+
+    return hostSelectors.join(" -> ") || null;
+  }
 
   function displayXPaths(
     xpaths,
@@ -298,39 +398,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    if (context.frame) {
-      let summary = "Top frame";
-      if (!context.frame.isTopFrame) {
-        const selectors = (context.frame.selectors || []).join(" → ");
-        let origin = context.frame.origin || "";
-        if (!origin && context.frame.url) {
-          try {
-            origin = new URL(context.frame.url).origin;
-          } catch (error) {
-            origin = context.frame.url;
-          }
-        }
-        const parts = [origin, selectors].filter(Boolean);
-        summary = parts.join(" · ") || "Nested frame";
-      }
-
-      frameInfo.textContent = summary;
+    const frameSummary = summarizeFrameContext(context.frame);
+    if (frameSummary) {
+      frameInfo.textContent = frameSummary;
       frameInfoRow.style.display = "block";
     } else {
       frameInfoRow.style.display = "none";
       frameInfo.textContent = "";
     }
 
-    if (context.shadow && context.shadow.depth > 0) {
-      const hostSelectors = (context.shadow.hosts || [])
-        .map((host) => host.selector || host.tagName?.toLowerCase())
-        .filter(Boolean);
-
-      if (context.shadow.targetSelector) {
-        hostSelectors.push(context.shadow.targetSelector);
-      }
-
-      shadowInfo.textContent = hostSelectors.join(" → ");
+    const shadowSummary = summarizeShadowContext(context.shadow);
+    if (shadowSummary) {
+      shadowInfo.textContent = shadowSummary;
       shadowInfoRow.style.display = "block";
     } else {
       shadowInfoRow.style.display = "none";
@@ -382,6 +461,281 @@ document.addEventListener("DOMContentLoaded", async () => {
     clearContextDisplay();
   }
 
+  function setRelationPlaceholder(message) {
+    relationXPathContainer.innerHTML = `
+      <div class="placeholder">
+        <img
+          class="placeholder__icon"
+          src="./images/hover-icon.png"
+          alt="Relation Placeholder"
+        />
+        <p>${message}</p>
+      </div>
+    `;
+  }
+
+  function renderRelationElementDetails(targetElements, data) {
+    if (!data || !data.elementInfo) {
+      targetElements.tag.textContent = "None";
+      targetElements.text.textContent = "None";
+      targetElements.frameRow.style.display = "none";
+      targetElements.shadowRow.style.display = "none";
+      return;
+    }
+
+    const { elementInfo, context } = data;
+    targetElements.tag.textContent = `<${elementInfo.tagName.toLowerCase()}>`;
+    targetElements.text.textContent = elementInfo.textContent || "No text content";
+
+    const frameSummary = summarizeFrameContext(context?.frame);
+    if (frameSummary) {
+      targetElements.frame.textContent = frameSummary;
+      targetElements.frameRow.style.display = "block";
+    } else {
+      targetElements.frameRow.style.display = "none";
+      targetElements.frame.textContent = "";
+    }
+
+    const shadowSummary = summarizeShadowContext(context?.shadow);
+    if (shadowSummary) {
+      targetElements.shadow.textContent = shadowSummary;
+      targetElements.shadowRow.style.display = "block";
+    } else {
+      targetElements.shadowRow.style.display = "none";
+      targetElements.shadow.textContent = "";
+    }
+  }
+
+  function renderRelationXPaths(relations, validationContext = null) {
+    relationXPathContainer.innerHTML = "";
+
+    if (!relations || relations.length === 0) {
+      setRelationPlaceholder(
+        "Select a target element to build relational selectors."
+      );
+      relationClearButton.style.display = "block";
+      return;
+    }
+
+    relations.forEach((option, index) => {
+      const optionDiv = document.createElement("div");
+      optionDiv.className = "xpath-option";
+
+      const header = document.createElement("div");
+      header.className = "xpath-header";
+
+      const typeSpan = document.createElement("span");
+      typeSpan.textContent = option.type || `Option ${index + 1}`;
+
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.textContent = "Copy";
+      copyBtn.onclick = () => copyXPath(option, copyBtn);
+
+      header.appendChild(typeSpan);
+      header.appendChild(copyBtn);
+
+      const content = document.createElement("div");
+      content.className = "xpath-content";
+
+      const textSpan = document.createElement("span");
+      textSpan.className = "xpath-text-highlight";
+      textSpan.textContent = option.xpath;
+
+      const note = document.createElement("div");
+      note.className = "relation-note";
+      note.textContent = option.note || "";
+      if (!option.note) {
+        note.style.display = "none";
+      }
+
+      const validation = document.createElement("div");
+      validation.className = "validation";
+
+      validateXPath(option, validationContext).then((result) => {
+        if (!result) {
+          validation.textContent = "Validation error";
+          validation.className = "validation invalid";
+          return;
+        }
+
+        if (result.status === "valid") {
+          validation.textContent = "Valid";
+          validation.className = "validation valid";
+        } else if (result.status === "manual") {
+          validation.textContent = result.message || "Manual check";
+          validation.className = "validation manual";
+        } else {
+          validation.textContent = "Not found";
+          validation.className = "validation invalid";
+        }
+      });
+
+      optionDiv.appendChild(header);
+      optionDiv.appendChild(content);
+      content.appendChild(textSpan);
+      content.appendChild(note);
+      content.appendChild(validation);
+
+      relationXPathContainer.appendChild(optionDiv);
+    });
+
+    relationClearButton.style.display = "block";
+  }
+
+  function resetRelationView() {
+    relationStatus.textContent =
+      "Select an anchor element to begin building a relational XPath.";
+
+      renderRelationElementDetails(
+        {
+          tag: relationAnchorTag,
+          text: relationAnchorText,
+          frameRow: relationAnchorFrameRow,
+          frame: relationAnchorFrame,
+          shadowRow: relationAnchorShadowRow,
+          shadow: relationAnchorShadow,
+        },
+        null
+      );
+
+      renderRelationElementDetails(
+        {
+          tag: relationTargetTag,
+          text: relationTargetText,
+          frameRow: relationTargetFrameRow,
+          frame: relationTargetFrame,
+          shadowRow: relationTargetShadowRow,
+          shadow: relationTargetShadow,
+        },
+        null
+      );
+
+    setRelationPlaceholder(
+      "Select an anchor element to start a relational selector."
+    );
+    relationClearButton.style.display = "none";
+  }
+
+  function renderRelationState(state) {
+    relationState = state || { anchor: null, target: null, relations: [] };
+
+    const hasAnchor = !!relationState.anchor;
+    const hasTarget = !!relationState.target;
+    const hasRelations =
+      Array.isArray(relationState.relations) && relationState.relations.length > 0;
+
+    renderRelationElementDetails(
+      {
+        tag: relationAnchorTag,
+        text: relationAnchorText,
+        frameRow: relationAnchorFrameRow,
+        frame: relationAnchorFrame,
+        shadowRow: relationAnchorShadowRow,
+        shadow: relationAnchorShadow,
+      },
+      relationState.anchor
+    );
+
+    renderRelationElementDetails(
+      {
+        tag: relationTargetTag,
+        text: relationTargetText,
+        frameRow: relationTargetFrameRow,
+        frame: relationTargetFrame,
+        shadowRow: relationTargetShadowRow,
+        shadow: relationTargetShadow,
+      },
+      relationState.target
+    );
+
+    if (!hasAnchor) {
+      relationStatus.textContent =
+        "Select an anchor element to begin building a relational XPath.";
+      setRelationPlaceholder(
+        "Select an anchor element to start a relational selector."
+      );
+      relationClearButton.style.display = "none";
+      return;
+    }
+
+    if (hasAnchor && !hasTarget) {
+      relationStatus.textContent =
+        "Anchor captured. Select a target element to compute relational selectors.";
+      setRelationPlaceholder(
+        "Hover and click a target element within the page to generate selectors."
+      );
+      relationClearButton.style.display = "block";
+      return;
+    }
+
+    if (hasAnchor && hasTarget && !hasRelations) {
+      relationStatus.textContent =
+        "No reliable relation selectors were generated. Try a different target or adjust the anchor.";
+      setRelationPlaceholder(
+        "Try selecting a different target element to generate relational selectors."
+      );
+      relationClearButton.style.display = "block";
+      return;
+    }
+
+    relationStatus.textContent =
+      "Relational selectors ready. Copy and adjust as needed for your automation.";
+    const validationContext =
+      relationState.target?.context || relationState.anchor?.context || null;
+    renderRelationXPaths(relationState.relations, validationContext);
+  }
+
+  function updateModeUI(mode) {
+    if (mode === "relation") {
+      singleModeBtn.classList.remove("active");
+      relationModeBtn.classList.add("active");
+      singleModeView.style.display = "none";
+      relationModeView.style.display = "block";
+    } else {
+      singleModeBtn.classList.add("active");
+      relationModeBtn.classList.remove("active");
+      singleModeView.style.display = "block";
+      relationModeView.style.display = "none";
+    }
+  }
+
+  async function switchInteractionMode(mode, { broadcast = true } = {}) {
+    const normalized = mode === "relation" ? "relation" : "standard";
+
+    if (interactionMode === normalized) {
+      updateModeUI(normalized);
+      if (normalized === "relation") {
+        if (!relationState.anchor) {
+          resetRelationView();
+        } else {
+          renderRelationState(relationState);
+        }
+      }
+      return;
+    }
+
+    interactionMode = normalized;
+    updateModeUI(normalized);
+    chrome.storage.local.set({ interactionMode: normalized });
+
+    if (broadcast) {
+      await sendMessageToAllFrames({
+        type: "SET_INTERACTION_MODE",
+        mode: normalized,
+      });
+    }
+
+    if (normalized === "standard") {
+      relationStatus.textContent =
+        "Relation mode disabled. Switch back to resume relational selectors.";
+    } else if (!relationState.anchor) {
+      resetRelationView();
+    } else {
+      renderRelationState(relationState);
+    }
+  }
+
   async function copyXPath(option, button) {
     try {
       await navigator.clipboard.writeText(option.xpath);
@@ -402,13 +756,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  async function validateXPath(option) {
+  async function validateXPath(option, contextOverride = null) {
     if (!option || !option.xpath) {
       return { status: "invalid" };
     }
 
     if (option.strategy === "shadow") {
-      const shadow = currentContext?.shadow;
+      const shadowContext = contextOverride?.shadow || currentContext?.shadow;
+      const frameContext = contextOverride?.frame || currentContext?.frame;
+      const shadow = shadowContext;
       if (!shadow || shadow.depth === 0 || !shadow.targetSelector) {
         return { status: "manual", message: "Shadow DOM" };
       }
@@ -420,7 +776,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         const target = { tabId: tab.id };
-        const frameId = currentContext?.frame?.frameId;
+        const frameId = frameContext?.frameId;
         if (typeof frameId === "number" && frameId >= 0) {
           target.frameIds = [frameId];
         }
@@ -465,7 +821,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const target = { tabId: tab.id };
-      const frameId = currentContext?.frame?.frameId;
+      const frameContext = contextOverride?.frame || currentContext?.frame;
+      const frameId = frameContext?.frameId;
       if (typeof frameId === "number" && frameId >= 0) {
         target.frameIds = [frameId];
       }
@@ -522,6 +879,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       disableHover().catch((error) =>
         console.error("Popup: Failed to disable hover", error)
       );
+    }
+  });
+
+  singleModeBtn.addEventListener("click", () => {
+    switchInteractionMode("standard").catch((error) =>
+      console.error("Popup: Failed to switch to single mode", error)
+    );
+  });
+
+  relationModeBtn.addEventListener("click", () => {
+    switchInteractionMode("relation").catch((error) =>
+      console.error("Popup: Failed to switch to relation mode", error)
+    );
+  });
+
+  relationClearButton.addEventListener("click", async () => {
+    try {
+      await sendMessageToAllFrames({ type: "RELATION_CLEAR" });
+    } catch (error) {
+      console.error("Popup: Failed to clear relation state", error);
     }
   });
 

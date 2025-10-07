@@ -45,6 +45,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep channel open for async sendResponse
   }
 
+  if (message.type === "RELATION_STATE_UPDATE") {
+    chrome.storage.local.set({ relationState: message.state }, () => {
+      sendResponse({ success: true });
+    });
+
+    try {
+      chrome.runtime.sendMessage(message).catch(() => {
+        console.log("Background: Popup not open to receive relation state");
+      });
+    } catch (error) {
+      console.log("Background: Error forwarding relation state", error);
+    }
+
+    return true;
+  }
+
   if (
     message.type === "XPATH_FOUND" ||
     message.type === "XPATH_CLEAR" ||
