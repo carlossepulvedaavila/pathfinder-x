@@ -1,4 +1,7 @@
 document.addEventListener("DOMContentLoaded", async () => {
+  // Establish a port so the background can detect when the panel closes
+  chrome.runtime.connect({ name: "sidepanel" });
+
   const xpathContainer = document.getElementById("xpathContainer");
   const elementInfoContainer = document.getElementById("elementInfo");
   const elementTag = document.getElementById("elementTag");
@@ -574,16 +577,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (tab?.id) {
       chrome.storage.local.remove(storageKeyForTab(tab.id));
     }
-    clearDisplay();
-  });
-
-  // Handle side panel close - notify content script
-  window.addEventListener("beforeunload", async () => {
-    try {
-      await sendMessageToAllFrames({ type: "PANEL_CLOSED" });
-    } catch (error) {
-      // Panel close notification failed
+    if (isLocked) {
+      isLocked = false;
+      lockControls.style.display = "none";
+      try {
+        await sendMessageToAllFrames({ type: "UNLOCK_ELEMENT" });
+      } catch (error) {
+        // Unlock failed
+      }
     }
+    clearDisplay();
   });
 
   // Reset for same-tab navigation (old locked element no longer exists)

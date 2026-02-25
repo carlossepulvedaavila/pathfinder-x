@@ -9,6 +9,31 @@ chrome.action.onClicked.addListener((tab) => {
 // Set side panel behavior — open on action click
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
+// Detect side panel close via port disconnect and clean up content script state
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "sidepanel") return;
+
+  port.onDisconnect.addListener(() => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs?.[0];
+      if (!tab?.id) return;
+
+      chrome.webNavigation.getAllFrames({ tabId: tab.id }, (frames) => {
+        if (chrome.runtime.lastError || !frames) return;
+
+        frames.forEach((frame) => {
+          chrome.tabs.sendMessage(
+            tab.id,
+            { type: "PANEL_CLOSED" },
+            { frameId: frame.frameId },
+            () => void chrome.runtime.lastError
+          );
+        });
+      });
+    });
+  });
+});
+
 // Handle messages from content script and forward to side panel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Only accept messages from our own extension
