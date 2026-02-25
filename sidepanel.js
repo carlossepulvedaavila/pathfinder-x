@@ -14,10 +14,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
   const toggle = document.getElementById("toggle");
+  const engineToggle = document.getElementById("engineToggle");
 
   let currentXPaths = [];
   let currentContext = null;
   let isLocked = false;
+  let currentEngine = "v2";
+  let currentComparisonMode = false;
+  let currentV1XPaths = [];
 
   function storageKeyForTab(tabId) {
     return `tabState_${tabId}`;
@@ -136,7 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       (saved.type === "XPATH_FOUND" || saved.type === "XPATH_LOCKED")
     ) {
       const locked = saved.type === "XPATH_LOCKED";
-      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context);
+      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context, saved.v1Xpaths);
 
       if (locked) {
         isLocked = true;
@@ -168,7 +172,30 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
 
+    // Restore engine preference
+    const engineResult = await chrome.storage.local.get(["xpathEngine", "comparisonMode"]);
+    if (engineResult.xpathEngine) {
+      currentEngine = engineResult.xpathEngine;
+    }
+    if (engineResult.comparisonMode) {
+      currentComparisonMode = true;
+    }
+
+    const activeEngine = currentComparisonMode ? "compare" : currentEngine;
+    engineToggle.querySelectorAll(".engine-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.engine === activeEngine);
+    });
+
     const tab = await getActiveTab();
+    if (tab?.id) {
+      chrome.runtime.sendMessage({
+        type: "SET_XPATH_ENGINE",
+        tabId: tab.id,
+        engine: currentEngine,
+        comparisonMode: currentComparisonMode,
+      });
+    }
+
     await restoreTabState(tab?.id);
   } catch (error) {
     // Content script not available on this page
@@ -187,7 +214,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           message.xpaths,
           message.elementInfo,
           false,
-          message.context
+          message.context,
+          message.v1Xpaths
         );
       }
     } else if (message.type === "XPATH_LOCKED") {
@@ -196,7 +224,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         message.xpaths,
         message.elementInfo,
         true,
-        message.context
+        message.context,
+        message.v1Xpaths
       );
       lockControls.style.display = "flex";
     } else if (message.type === "XPATH_CLEAR") {
@@ -210,13 +239,73 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  function buildXPathCard(option, isV1) {
+    const optionDiv = document.createElement("div");
+    optionDiv.className = isV1 ? "xpath-option v1-card" : "xpath-option";
+
+    const header = document.createElement("div");
+    header.className = "xpath-header";
+
+    const typeSpan = document.createElement("span");
+    typeSpan.textContent = isV1 ? `${option.type} (v1)` : option.type;
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "Copy";
+    copyBtn.onclick = () => copyXPath(option, copyBtn);
+
+    header.appendChild(typeSpan);
+    header.appendChild(copyBtn);
+
+    const content = document.createElement("div");
+    content.className = "xpath-content";
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "xpath-text-highlight";
+    textSpan.textContent = option.xpath;
+
+    const validation = document.createElement("div");
+    validation.className = "validation";
+
+    validateXPath(option).then((result) => {
+      if (!result) {
+        validation.textContent = "Validation error";
+        validation.className = "validation invalid";
+        return;
+      }
+
+      if (result.status === "unique") {
+        validation.textContent = "Unique";
+        validation.className = "validation valid";
+      } else if (result.status === "multiple") {
+        validation.textContent = `${result.count} matches`;
+        validation.className = "validation manual";
+      } else if (result.status === "manual") {
+        validation.textContent = result.message || "Manual check";
+        validation.className = "validation manual";
+      } else {
+        validation.textContent = "Not found";
+        validation.className = "validation invalid";
+      }
+    });
+
+    optionDiv.appendChild(header);
+    optionDiv.appendChild(content);
+    content.appendChild(textSpan);
+    content.appendChild(validation);
+
+    return optionDiv;
+  }
+
   function displayXPaths(
     xpaths,
     elementDetails,
     locked = false,
-    context = null
+    context = null,
+    v1Xpaths = null
   ) {
     currentXPaths = xpaths;
+    currentV1XPaths = v1Xpaths || [];
     currentContext = context;
 
     // Show element info
@@ -240,60 +329,29 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
+    // Add engine label when in comparison mode
+    if (currentComparisonMode && v1Xpaths) {
+      const v2Label = document.createElement("div");
+      v2Label.className = "engine-divider";
+      v2Label.textContent = "V2 Engine";
+      xpathContainer.appendChild(v2Label);
+    }
+
     xpaths.forEach((option) => {
-      const optionDiv = document.createElement("div");
-      optionDiv.className = "xpath-option";
-
-      const header = document.createElement("div");
-      header.className = "xpath-header";
-
-      const typeSpan = document.createElement("span");
-      typeSpan.textContent = option.type;
-
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "copy-btn";
-      copyBtn.textContent = "Copy";
-      copyBtn.onclick = () => copyXPath(option, copyBtn);
-
-      header.appendChild(typeSpan);
-      header.appendChild(copyBtn);
-
-      const content = document.createElement("div");
-      content.className = "xpath-content";
-
-      const textSpan = document.createElement("span");
-      textSpan.className = "xpath-text-highlight";
-      textSpan.textContent = option.xpath;
-
-      const validation = document.createElement("div");
-      validation.className = "validation";
-
-      validateXPath(option).then((result) => {
-        if (!result) {
-          validation.textContent = "Validation error";
-          validation.className = "validation invalid";
-          return;
-        }
-
-        if (result.status === "valid") {
-          validation.textContent = "Valid";
-          validation.className = "validation valid";
-        } else if (result.status === "manual") {
-          validation.textContent = result.message || "Manual check";
-          validation.className = "validation manual";
-        } else {
-          validation.textContent = "Not found";
-          validation.className = "validation invalid";
-        }
-      });
-
-      optionDiv.appendChild(header);
-      optionDiv.appendChild(content);
-      content.appendChild(textSpan);
-      content.appendChild(validation);
-
-      xpathContainer.appendChild(optionDiv);
+      xpathContainer.appendChild(buildXPathCard(option, false));
     });
+
+    // Render V1 cards in comparison mode
+    if (currentComparisonMode && v1Xpaths && v1Xpaths.length > 0) {
+      const divider = document.createElement("div");
+      divider.className = "engine-divider";
+      divider.textContent = "V1 Engine";
+      xpathContainer.appendChild(divider);
+
+      v1Xpaths.forEach((option) => {
+        xpathContainer.appendChild(buildXPathCard(option, true));
+      });
+    }
 
     clearButton.style.display = "block";
   }
@@ -444,24 +502,26 @@ document.addEventListener("DOMContentLoaded", async () => {
               for (const host of hosts) {
                 const selector = host.selector || host.tagName?.toLowerCase();
                 if (!selector) {
-                  return false;
+                  return 0;
                 }
                 const nextHost = scope.querySelector(selector);
                 if (!nextHost || !nextHost.shadowRoot) {
-                  return false;
+                  return 0;
                 }
                 scope = nextHost.shadowRoot;
               }
-              return !!scope.querySelector(targetSelector);
+              return scope.querySelectorAll(targetSelector).length;
             } catch (error) {
-              return false;
+              return 0;
             }
           },
           args: [shadow.hosts || [], shadow.targetSelector],
         });
 
-        const isValid = Boolean(result && result[0] && result[0].result);
-        return { status: isValid ? "valid" : "invalid" };
+        const count = (result && result[0] && result[0].result) || 0;
+        if (count === 1) return { status: "unique" };
+        if (count > 1) return { status: "multiple", count };
+        return { status: "invalid" };
       } catch (error) {
         return { status: "manual", message: "Shadow DOM" };
       }
@@ -486,7 +546,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         function: (value, strategy) => {
           try {
             if (strategy === "css") {
-              return document.querySelectorAll(value).length > 0;
+              return document.querySelectorAll(value).length;
             }
             if (strategy === "xpath") {
               const evaluation = document.evaluate(
@@ -496,18 +556,20 @@ document.addEventListener("DOMContentLoaded", async () => {
                 XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
                 null
               );
-              return evaluation.snapshotLength > 0;
+              return evaluation.snapshotLength;
             }
-            return false;
+            return 0;
           } catch (error) {
-            return false;
+            return 0;
           }
         },
         args: [option.xpath, strategy],
       });
 
-      const isValid = Boolean(result && result[0] && result[0].result);
-      return { status: isValid ? "valid" : "invalid" };
+      const count = (result && result[0] && result[0].result) || 0;
+      if (count === 1) return { status: "unique" };
+      if (count > 1) return { status: "multiple", count };
+      return { status: "invalid" };
     } catch (error) {
       return { status: "invalid" };
     }
@@ -522,6 +584,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // Relay Space key to content script (side panel has focus, not the page)
+  document.addEventListener("keydown", async (event) => {
+    if (event.code !== "Space") return;
+    // Don't intercept Space on interactive elements
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+    event.preventDefault();
+    try {
+      await sendMessageToAllFrames({ type: "TOGGLE_LOCK" });
+    } catch (error) {
+      // Relay failed
+    }
+  });
+
   // Toggle switch
   toggle.addEventListener("change", () => {
     if (toggle.checked) {
@@ -529,6 +605,40 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
       disableHover().catch(() => {});
     }
+  });
+
+  // Engine toggle
+  engineToggle.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".engine-btn");
+    if (!btn) return;
+
+    const engine = btn.dataset.engine;
+
+    engineToggle.querySelectorAll(".engine-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+
+    if (engine === "compare") {
+      currentEngine = "v2";
+      currentComparisonMode = true;
+    } else {
+      currentEngine = engine;
+      currentComparisonMode = false;
+    }
+
+    const tab = await getActiveTab();
+    if (tab?.id) {
+      chrome.runtime.sendMessage({
+        type: "SET_XPATH_ENGINE",
+        tabId: tab.id,
+        engine: currentEngine,
+        comparisonMode: currentComparisonMode,
+      });
+    }
+
+    chrome.storage.local.set({
+      xpathEngine: currentEngine,
+      comparisonMode: currentComparisonMode,
+    });
   });
 
   async function enableHover() {
@@ -598,6 +708,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
       }
 
+      // Sync engine preference to new tab
+      const activeTab = await getActiveTab();
+      if (activeTab?.id) {
+        chrome.runtime.sendMessage({
+          type: "SET_XPATH_ENGINE",
+          tabId: activeTab.id,
+          engine: currentEngine,
+          comparisonMode: currentComparisonMode,
+        });
+      }
+
       await restoreTabState(activeInfo.tabId);
     } catch (error) {
       // Tab change handling failed
@@ -616,10 +737,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         // Re-inject content script and restore hover after page load
         await ensureContentScriptInjected();
         await sendMessageToAllFrames({ type: "PANEL_OPENED" });
-        const result = await chrome.storage.local.get("isHoveringEnabled");
-        if (!result || result.isHoveringEnabled !== false) {
+        if (toggle.checked) {
           await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
         }
+
+        // Sync engine preference after navigation
+        chrome.runtime.sendMessage({
+          type: "SET_XPATH_ENGINE",
+          tabId,
+          engine: currentEngine,
+          comparisonMode: currentComparisonMode,
+        });
       }
     } catch (error) {
       // Tab update handling failed

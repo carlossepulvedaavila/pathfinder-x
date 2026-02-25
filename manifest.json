@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pathfinder-X",
-  "version": "1.2",
+  "version": "2.0",
   "description": "Finds the best XPath for any element on a webpage.",
   "permissions": [
     "activeTab",

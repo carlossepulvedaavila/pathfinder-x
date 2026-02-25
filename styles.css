@@ -63,6 +63,70 @@ body {
   padding-bottom: 8px;
 }
 
+.engine-controls {
+  margin: 6px;
+  display: flex;
+  justify-content: center;
+}
+
+.engine-toggle {
+  display: inline-flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #d0d0d0;
+  background: #e8e8e8;
+}
+
+.engine-btn {
+  background: transparent;
+  border: none;
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.2s;
+}
+
+.engine-btn.active {
+  background: #301e88;
+  color: white;
+}
+
+.engine-btn:hover:not(.active) {
+  background: #d0cce8;
+  color: #301e88;
+}
+
+.engine-divider {
+  display: flex;
+  align-items: center;
+  margin: 8px 12px 4px;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #999;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.engine-divider::before,
+.engine-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #d0d0d0;
+}
+
+.xpath-option.v1-card {
+  opacity: 0.75;
+}
+
+.xpath-option.v1-card .xpath-header {
+  background-color: #555;
+}
+
 .element-info {
   background: #e8e8e8;
   margin: 6px;

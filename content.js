@@ -36,8 +36,8 @@ function escapeXPathString(str) {
   return parts.length > 1 ? `concat(${escaped})` : `"${str}"`;
 }
 
-// Optimized XPath generation for Playwright and Selenium
-function getOptimizedXPath(element) {
+// V1 XPath generation (original cascade)
+function getOptimizedXPathV1(element) {
   // Priority 1: Use ID if available and unique
   if (
     element.id &&
@@ -205,15 +205,41 @@ function getStructuralXPath(element) {
   return `${parentPath}/${element.tagName.toLowerCase()}${position}`;
 }
 
+function isUniqueSelector(option) {
+  try {
+    if (option.strategy === "shadow") return true;
+    if (option.strategy === "css") {
+      return document.querySelectorAll(option.xpath).length === 1;
+    }
+    return isUniqueXPath(option.xpath);
+  } catch (e) {
+    return false;
+  }
+}
+
+function filterUniqueOptions(options) {
+  const unique = options.filter(isUniqueSelector);
+  // Always return at least the structural/first option so the card isn't empty
+  return unique.length > 0 ? unique : options.slice(0, 1);
+}
+
 // Generate multiple XPath options
-function generateXPathOptions(element) {
+function generateXPathOptions(element, engine) {
+  const activeEngine = engine || xpathEngine;
+  const getOptimized = activeEngine === "v1"
+    ? getOptimizedXPathV1
+    : getOptimizedXPathV2;
+  const getAlternatives = activeEngine === "v1"
+    ? generateAlternativeXPathsV1
+    : generateAlternativeXPathsV2;
+
   const options = [];
 
   try {
-    const optimized = getOptimizedXPath(element);
+    const optimized = getOptimized(element);
     options.push({ type: "Optimized", xpath: optimized, strategy: "xpath" });
 
-    const alternatives = generateAlternativeXPaths(element);
+    const alternatives = getAlternatives(element);
     alternatives.forEach((alt) => {
       if (
         alt.xpath !== optimized &&
@@ -257,19 +283,21 @@ function generateXPathOptions(element) {
       });
     }
 
-    if (options.length > 5) {
-      const shadowOption = options.find((opt) => opt.strategy === "shadow");
+    const filtered = filterUniqueOptions(options);
+
+    if (filtered.length > 5) {
+      const shadowOption = filtered.find((opt) => opt.strategy === "shadow");
       if (shadowOption) {
-        const trimmed = options
+        const trimmed = filtered
           .filter((opt) => opt.strategy !== "shadow")
           .slice(0, 4);
         trimmed.push(shadowOption);
         return trimmed;
       }
-      return options.slice(0, 5);
+      return filtered.slice(0, 5);
     }
 
-    return options;
+    return filtered;
   } catch (error) {
     return [
       {
@@ -281,7 +309,7 @@ function generateXPathOptions(element) {
   }
 }
 
-function generateAlternativeXPaths(element) {
+function generateAlternativeXPathsV1(element) {
   const alternatives = [];
 
   // Alternative 1: Tag + any meaningful attribute
@@ -348,6 +376,371 @@ function generateAlternativeXPaths(element) {
       alternatives.push({
         type: "By position",
         xpath: `(//${element.tagName.toLowerCase()})[${position}]`,
+        strategy: "xpath",
+      });
+    }
+  }
+
+  return alternatives;
+}
+
+// --- V2 Engine: Shared helpers ---
+
+function isUniqueXPath(xpath) {
+  try {
+    return document.evaluate(
+      xpath, document, null,
+      XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+    ).snapshotLength === 1;
+  } catch (e) {
+    return false;
+  }
+}
+
+const DYNAMIC_ID_PATTERNS = [
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  /^[0-9a-f]{16,}$/i,
+  /^:r[0-9a-z]+:$/,
+  /^(ember|react-select-|__next-|radix-)\d/,
+  /^[a-zA-Z_-]*[0-9]{5,}$/,
+  /^[a-z]{1,3}-[0-9a-f]{6,}$/i,
+  /^[a-z]+_[A-Za-z0-9+/=]{8,}$/,
+];
+
+function isStableId(id) {
+  if (!id || id.length < 2) return false;
+  return !DYNAMIC_ID_PATTERNS.some(pattern => pattern.test(id));
+}
+
+const TEST_ATTRIBUTES_V2 = [
+  "data-testid", "data-test", "data-cy", "data-qa", "data-automation"
+];
+const TEST_ATTR_SET = new Set(TEST_ATTRIBUTES_V2);
+
+const IGNORE_DATA_PATTERNS = [
+  /^data-reactid$/,
+  /^data-react/,
+  /^data-v-/,
+  /^data-emotion/,
+  /^data-styled/,
+  /^data-radix/,
+  /^data-headlessui/,
+  /^data-rbd/,
+];
+
+function isSemanticDataAttr(attrName) {
+  if (!attrName.startsWith("data-")) return false;
+  if (TEST_ATTR_SET.has(attrName)) return false;
+  return !IGNORE_DATA_PATTERNS.some(p => p.test(attrName));
+}
+
+function getMeaningfulClasses(element) {
+  if (!element.className || typeof element.className !== "string") return [];
+  return element.className.trim().split(/\s+/).filter(cls =>
+    cls.length > 2 &&
+    !cls.match(/^(d-|flex-|text-|bg-|border-|p-|m-|col-|row-|w-|h-|gap-|grid-|justify-|items-|self-|btn-secondary|btn-primary)/) &&
+    !cls.match(/^[a-z]{1,2}$/) &&
+    !cls.match(/^[a-f0-9]{6,}$/i)
+  );
+}
+
+function findStableAnchor(element) {
+  let current = element.parentElement;
+  let depth = 0;
+  const MAX_DEPTH = 6;
+
+  while (current && current !== document.body && depth < MAX_DEPTH) {
+    depth++;
+
+    if (current.id && isStableId(current.id)) {
+      const escaped = CSS.escape(current.id);
+      if (document.querySelectorAll(`#${escaped}`).length === 1) {
+        return { element: current, xpath: `//*[@id=${escapeXPathString(current.id)}]`, depth };
+      }
+    }
+
+    for (const attr of TEST_ATTRIBUTES_V2) {
+      const val = current.getAttribute(attr);
+      if (val) {
+        const anchorXpath = `//*[@${attr}=${escapeXPathString(val)}]`;
+        if (isUniqueXPath(anchorXpath)) {
+          return { element: current, xpath: anchorXpath, depth };
+        }
+      }
+    }
+
+    const role = current.getAttribute("role");
+    if (role) {
+      const anchorXpath = `//*[@role=${escapeXPathString(role)}]`;
+      if (isUniqueXPath(anchorXpath)) {
+        return { element: current, xpath: anchorXpath, depth };
+      }
+    }
+
+    const name = current.getAttribute("name");
+    if (name) {
+      const anchorXpath = `//${current.tagName.toLowerCase()}[@name=${escapeXPathString(name)}]`;
+      if (isUniqueXPath(anchorXpath)) {
+        return { element: current, xpath: anchorXpath, depth };
+      }
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function buildRelativePath(fromAncestor, toElement) {
+  const path = [];
+  let current = toElement;
+
+  while (current && current !== fromAncestor) {
+    const parent = current.parentElement;
+    if (!parent) break;
+
+    const siblings = Array.from(parent.children).filter(
+      child => child.tagName === current.tagName
+    );
+    let step = current.tagName.toLowerCase();
+    if (siblings.length > 1) {
+      const index = siblings.indexOf(current) + 1;
+      step += `[${index}]`;
+    }
+    path.unshift(step);
+    current = parent;
+  }
+
+  return path.join("/");
+}
+
+// --- V2 Engine: Optimized XPath with new cascade ---
+
+function getOptimizedXPathV2(element) {
+  const tag = element.tagName.toLowerCase();
+
+  // Priority 1: Stable ID
+  if (element.id) {
+    const escaped = CSS.escape(element.id);
+    if (
+      isStableId(element.id) &&
+      document.querySelectorAll(`#${escaped}`).length === 1
+    ) {
+      return `//*[@id=${escapeXPathString(element.id)}]`;
+    }
+  }
+
+  // Priority 2: Name + type combination (form elements)
+  const FORM_TAGS = ["INPUT", "SELECT", "TEXTAREA", "BUTTON"];
+  if (FORM_TAGS.includes(element.tagName)) {
+    const name = element.getAttribute("name");
+    const type = element.getAttribute("type");
+
+    if (name && type) {
+      const xpath = `//${tag}[@name=${escapeXPathString(name)} and @type=${escapeXPathString(type)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    if (name) {
+      const xpath = `//${tag}[@name=${escapeXPathString(name)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+  }
+
+  // Priority 3: ARIA role (elevated — spec-driven, never localized)
+  const role = element.getAttribute("role");
+  if (role) {
+    const xpath = `//*[@role=${escapeXPathString(role)}]`;
+    if (isUniqueXPath(xpath)) return xpath;
+
+    const tagXpath = `//${tag}[@role=${escapeXPathString(role)}]`;
+    if (isUniqueXPath(tagXpath)) return tagXpath;
+  }
+
+  // Priority 4: Test attributes (with uniqueness check)
+  for (const attr of TEST_ATTRIBUTES_V2) {
+    const value = element.getAttribute(attr);
+    if (value) {
+      const xpath = `//*[@${attr}=${escapeXPathString(value)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+  }
+
+  // Priority 5: Semantic data-* attributes
+  const dataAttrs = Array.from(element.attributes)
+    .filter(a => isSemanticDataAttr(a.name) && a.value && a.value.length < 80)
+    .sort((a, b) => a.value.length - b.value.length);
+
+  for (const attr of dataAttrs) {
+    const xpath = `//*[@${attr.name}=${escapeXPathString(attr.value)}]`;
+    if (isUniqueXPath(xpath)) return xpath;
+  }
+
+  // Priority 6: Multi-condition attribute triangulation
+  const STABLE_ATTRS = [
+    "name", "type", "role", "aria-label",
+    "placeholder", "title", "alt", "href", "for"
+  ];
+
+  const presentAttrs = STABLE_ATTRS
+    .map(attr => ({ name: attr, value: element.getAttribute(attr) }))
+    .filter(a => a.value && a.value.length < 60);
+
+  dataAttrs.forEach(a => {
+    if (presentAttrs.length < 8) {
+      presentAttrs.push({ name: a.name, value: a.value });
+    }
+  });
+
+  // Try pairs
+  if (presentAttrs.length >= 2) {
+    for (let i = 0; i < presentAttrs.length - 1; i++) {
+      for (let j = i + 1; j < presentAttrs.length; j++) {
+        const a = presentAttrs[i];
+        const b = presentAttrs[j];
+        const xpath = `//${tag}[@${a.name}=${escapeXPathString(a.value)} and @${b.name}=${escapeXPathString(b.value)}]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+  }
+
+  // Try triples
+  if (presentAttrs.length >= 3) {
+    for (let i = 0; i < presentAttrs.length - 2; i++) {
+      for (let j = i + 1; j < presentAttrs.length - 1; j++) {
+        for (let k = j + 1; k < presentAttrs.length; k++) {
+          const a = presentAttrs[i];
+          const b = presentAttrs[j];
+          const c = presentAttrs[k];
+          const xpath = `//${tag}[@${a.name}=${escapeXPathString(a.value)} and @${b.name}=${escapeXPathString(b.value)} and @${c.name}=${escapeXPathString(c.value)}]`;
+          if (isUniqueXPath(xpath)) return xpath;
+        }
+      }
+    }
+  }
+
+  // Priority 7: Meaningful class + attribute
+  const meaningfulClasses = getMeaningfulClasses(element);
+
+  for (const cls of meaningfulClasses.slice(0, 3)) {
+    for (const attr of presentAttrs.slice(0, 3)) {
+      const xpath = `//${tag}[contains(@class,${escapeXPathString(cls)}) and @${attr.name}=${escapeXPathString(attr.value)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    const xpath = `//${tag}[contains(@class,${escapeXPathString(cls)})]`;
+    if (isUniqueXPath(xpath)) return xpath;
+  }
+
+  // Priority 8: Scoped structural with stable anchor
+  const anchor = findStableAnchor(element);
+  if (anchor) {
+    const relativePath = buildRelativePath(anchor.element, element);
+    if (relativePath) {
+      const xpath = `${anchor.xpath}/${relativePath}`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    const descXpath = `${anchor.xpath}//${tag}`;
+    if (isUniqueXPath(descXpath)) return descXpath;
+  }
+
+  // Priority 9: Complex predicates — text content
+  if (["A", "BUTTON", "SPAN", "LABEL", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "TD", "TH"].includes(element.tagName)) {
+    const text = element.textContent?.trim();
+    if (text && text.length > 2 && text.length < 50) {
+      const xpath = `//${tag}[normalize-space(text())=${escapeXPathString(text)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+
+      const containsXpath = `//${tag}[contains(normalize-space(.),${escapeXPathString(text)})]`;
+      if (isUniqueXPath(containsXpath)) return containsXpath;
+    }
+  }
+
+  // Priority 9b: Label-relative selectors for form inputs
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(element.tagName)) {
+    const prevLabel = element.previousElementSibling;
+    if (prevLabel && prevLabel.tagName === "LABEL" && prevLabel.textContent?.trim()) {
+      const labelText = prevLabel.textContent.trim();
+      if (labelText.length < 40) {
+        const xpath = `//label[normalize-space(.)=${escapeXPathString(labelText)}]/following-sibling::${tag}[1]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+
+    if (element.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+      if (label && label.textContent?.trim()) {
+        const labelText = label.textContent.trim();
+        const xpath = `//label[normalize-space(.)=${escapeXPathString(labelText)}]/following::${tag}[1]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+  }
+
+  // Priority 10: Full structural fallback
+  return getStructuralXPath(element);
+}
+
+// --- V2 Engine: Alternative XPaths ---
+
+function generateAlternativeXPathsV2(element) {
+  const alternatives = [];
+  const tag = element.tagName.toLowerCase();
+
+  // Alt 1: By aria-label
+  const ariaLabel = element.getAttribute("aria-label");
+  if (ariaLabel && ariaLabel.length < 60) {
+    alternatives.push({
+      type: "By aria-label",
+      xpath: `//${tag}[@aria-label=${escapeXPathString(ariaLabel)}]`,
+      strategy: "xpath",
+    });
+  }
+
+  // Alt 2: By semantic data-* attribute
+  const dataAttr = Array.from(element.attributes).find(
+    a => isSemanticDataAttr(a.name) && a.value
+  );
+  if (dataAttr) {
+    alternatives.push({
+      type: `By ${dataAttr.name}`,
+      xpath: `//*[@${dataAttr.name}=${escapeXPathString(dataAttr.value)}]`,
+      strategy: "xpath",
+    });
+  }
+
+  // Alt 3: Scoped path
+  const anchor = findStableAnchor(element);
+  if (anchor) {
+    const relPath = buildRelativePath(anchor.element, element);
+    if (relPath) {
+      alternatives.push({
+        type: "Scoped path",
+        xpath: `${anchor.xpath}/${relPath}`,
+        strategy: "xpath",
+      });
+    }
+  }
+
+  // Alt 4: By text content
+  const text = element.textContent?.trim();
+  if (text && text.length > 2 && text.length < 40) {
+    alternatives.push({
+      type: "By text",
+      xpath: `//${tag}[contains(normalize-space(.),${escapeXPathString(text)})]`,
+      strategy: "xpath",
+    });
+  }
+
+  // Alt 5: By position (interactive elements)
+  if (["INPUT", "BUTTON", "SELECT", "A"].includes(element.tagName)) {
+    const similarElements = document.querySelectorAll(tag);
+    const position = Array.from(similarElements).indexOf(element) + 1;
+    if (position > 0 && position <= 5) {
+      alternatives.push({
+        type: "By position",
+        xpath: `(//${tag})[${position}]`,
         strategy: "xpath",
       });
     }
@@ -586,9 +979,16 @@ function buildContext(element) {
 }
 
 function gatherSelectionData(element) {
-  const xpaths = generateXPathOptions(element);
   const context = buildContext(element);
   const elementInfo = buildElementInfo(element, context);
+
+  if (comparisonMode) {
+    const xpaths = generateXPathOptions(element, "v2");
+    const v1Xpaths = generateXPathOptions(element, "v1");
+    return { xpaths, v1Xpaths, context, elementInfo, comparisonMode: true };
+  }
+
+  const xpaths = generateXPathOptions(element);
   return { xpaths, context, elementInfo };
 }
 
@@ -603,6 +1003,51 @@ function getComposedPathTarget(event) {
   return event.target instanceof Element ? event.target : null;
 }
 
+// Bubble up from generic wrappers (div, span, svg, etc.) to the nearest
+// semantic/interactive parent so selectors target the meaningful element
+// (e.g. <button> instead of its inner <div>).
+const SEMANTIC_TARGETS = new Set([
+  "A", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "LABEL",
+  "SUMMARY", "OPTION", "DETAILS",
+]);
+
+const INTERACTIVE_ROLES = new Set([
+  "button", "link", "menuitem", "tab", "option",
+  "checkbox", "radio", "switch", "combobox",
+]);
+
+const WRAPPER_TAGS = new Set([
+  "DIV", "SPAN", "SVG", "PATH", "G", "IMG", "I",
+  "EM", "STRONG", "B", "P", "SMALL",
+]);
+
+function resolveSmartTarget(element) {
+  if (SEMANTIC_TARGETS.has(element.tagName)) return element;
+
+  const role = element.getAttribute("role");
+  if (role && INTERACTIVE_ROLES.has(role)) return element;
+
+  if (!WRAPPER_TAGS.has(element.tagName)) return element;
+
+  let current = element.parentElement;
+  let depth = 0;
+
+  while (current && current !== document.body && depth < 3) {
+    if (SEMANTIC_TARGETS.has(current.tagName)) return current;
+
+    const parentRole = current.getAttribute("role");
+    if (parentRole && INTERACTIVE_ROLES.has(parentRole)) return current;
+
+    // Stop at non-wrapper elements — don't skip past meaningful containers
+    if (!WRAPPER_TAGS.has(current.tagName)) break;
+
+    current = current.parentElement;
+    depth++;
+  }
+
+  return element;
+}
+
 // State management
 let highlightedElement = null;
 let lastElement = null;
@@ -615,6 +1060,8 @@ let isPanelOpen = false;
 let hoverEnabled = false;
 let listenersAttached = false;
 let hoverPreference = true;
+let xpathEngine = "v2";
+let comparisonMode = false;
 
 function cleanup() {
   isExtensionValid = false;
@@ -714,11 +1161,13 @@ function handleMouseOver(event) {
     return;
   }
 
-  const element = getComposedPathTarget(event);
+  const rawElement = getComposedPathTarget(event);
 
-  if (!element) {
+  if (!rawElement) {
     return;
   }
+
+  const element = resolveSmartTarget(rawElement);
 
   if (element === lastElement || element.id === "pathfinder-x-highlight") {
     return;
@@ -747,9 +1196,7 @@ function handleMouseOver(event) {
 
     const message = {
       type: "XPATH_FOUND",
-      xpaths: payload.xpaths,
-      elementInfo: payload.elementInfo,
-      context: payload.context,
+      ...payload,
     };
 
     try {
@@ -808,11 +1255,13 @@ function handleClick(event) {
     return;
   }
 
-  const element = getComposedPathTarget(event);
+  const rawElement = getComposedPathTarget(event);
 
-  if (!element) {
+  if (!rawElement) {
     return;
   }
+
+  const element = resolveSmartTarget(rawElement);
 
   if (
     element.tagName === "HTML" ||
@@ -847,9 +1296,7 @@ function lockElement(element) {
 
   const message = {
     type: "XPATH_LOCKED",
-    xpaths: payload.xpaths,
-    elementInfo: payload.elementInfo,
-    context: payload.context,
+    ...payload,
   };
 
   try {
@@ -913,7 +1360,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
-  if (message.type === "UNLOCK_ELEMENT") {
+  if (message.type === "SET_XPATH_ENGINE") {
+    xpathEngine = message.engine || "v2";
+    comparisonMode = !!message.comparisonMode;
+    sendResponse({ success: true });
+
+    // Re-generate selectors for locked element with new engine
+    if (isLocked && lockedElement && lockedElement.isConnected) {
+      const payload = gatherSelectionData(lockedElement);
+      const msg = { type: "XPATH_LOCKED", ...payload };
+      try {
+        chrome.runtime.sendMessage(msg, () => { void chrome.runtime.lastError; });
+      } catch (e) { /* context may be invalid */ }
+    }
+    return;
+  }
+
+  if (message.type === "TOGGLE_LOCK") {
+    if (isLocked) {
+      unlockElement();
+    } else if (hoverEnabled && lastElement) {
+      lockElement(lastElement);
+    }
+    sendResponse({ success: true });
+  } else if (message.type === "UNLOCK_ELEMENT") {
     unlockElement();
     sendResponse({ success: true });
   } else if (message.type === "PANEL_OPENED") {
