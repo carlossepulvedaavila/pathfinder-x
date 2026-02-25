@@ -1,3 +1,10 @@
+// Prevent double-initialization when injected both by manifest and scripting API
+if (window.__pathfinderXLoaded) {
+  // Already running — just re-register the message listener is not needed
+  // since the first instance is still active
+} else {
+window.__pathfinderXLoaded = true;
+
 // Check if extension context is valid
 function checkExtensionContext() {
   try {
@@ -10,16 +17,23 @@ function checkExtensionContext() {
 
 // Initialize content script only if extension context is valid
 function initializeContentScript() {
-  // Check if extension context is valid on load
   if (!checkExtensionContext()) {
-    console.log(
-      "Pathfinder-X: Extension context invalid, not initializing content script"
-    );
     return false;
   }
-
-  console.log("Pathfinder-X: Content script initialized");
   return true;
+}
+
+// XPath string escaping to prevent injection from element attributes
+function escapeXPathString(str) {
+  if (!str) return '""';
+  if (!str.includes('"')) return `"${str}"`;
+  if (!str.includes("'")) return `'${str}'`;
+  // Use concat() for strings containing both quote types
+  const parts = str.split('"');
+  const escaped = parts
+    .map((part, i) => (i === 0 ? `"${part}"` : `concat('"',"${part}")`))
+    .join(",");
+  return parts.length > 1 ? `concat(${escaped})` : `"${str}"`;
 }
 
 // Optimized XPath generation for Playwright and Selenium
@@ -29,7 +43,7 @@ function getOptimizedXPath(element) {
     element.id &&
     document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1
   ) {
-    return `//*[@id="${element.id}"]`;
+    return `//*[@id=${escapeXPathString(element.id)}]`;
   }
 
   // Priority 2: Use data-testid or similar test attributes
@@ -37,7 +51,7 @@ function getOptimizedXPath(element) {
   for (const attr of testAttributes) {
     const value = element.getAttribute(attr);
     if (value) {
-      return `//*[@${attr}="${value}"]`;
+      return `//*[@${attr}=${escapeXPathString(value)}]`;
     }
   }
 
@@ -45,18 +59,17 @@ function getOptimizedXPath(element) {
   if (element.className && typeof element.className === "string") {
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
 
-    // Try single meaningful classes first
     const meaningfulClasses = classes.filter(
       (cls) =>
         cls.length > 2 &&
         !cls.match(
           /^(d-|flex-|text-|bg-|border-|p-|m-|col-|row-|btn-secondary|btn-primary)/
         ) &&
-        !cls.match(/^[a-z]{1,2}$/) // Skip very short classes like "d", "p", "m"
+        !cls.match(/^[a-z]{1,2}$/)
     );
 
     for (const cls of meaningfulClasses) {
-      const xpath = `//*[@class="${cls}"]`;
+      const xpath = `//*[@class=${escapeXPathString(cls)}]`;
       if (
         document.evaluate(
           xpath,
@@ -70,10 +83,8 @@ function getOptimizedXPath(element) {
       }
     }
 
-    // Try with contains for single meaningful class
     for (const cls of meaningfulClasses.slice(0, 3)) {
-      // Only try first 3 meaningful classes
-      const xpath = `//${element.tagName.toLowerCase()}[contains(@class,"${cls}")]`;
+      const xpath = `//${element.tagName.toLowerCase()}[contains(@class,${escapeXPathString(cls)})]`;
       if (
         document.evaluate(
           xpath,
@@ -101,7 +112,7 @@ function getOptimizedXPath(element) {
   for (const attr of uniqueAttrs) {
     const value = element.getAttribute(attr);
     if (value) {
-      const xpath = `//${element.tagName.toLowerCase()}[@${attr}="${value}"]`;
+      const xpath = `//${element.tagName.toLowerCase()}[@${attr}=${escapeXPathString(value)}]`;
       if (
         document.evaluate(
           xpath,
@@ -116,14 +127,14 @@ function getOptimizedXPath(element) {
     }
   }
 
-  // Priority 5: Use text content for clickable elements (with tag specificity)
+  // Priority 5: Use text content for clickable elements
   if (
     ["A", "BUTTON", "SPAN", "LABEL"].includes(element.tagName) &&
     element.textContent
   ) {
     const text = element.textContent.trim();
     if (text && text.length < 30 && text.length > 2) {
-      const xpath = `//${element.tagName.toLowerCase()}[normalize-space(text())="${text}"]`;
+      const xpath = `//${element.tagName.toLowerCase()}[normalize-space(text())=${escapeXPathString(text)}]`;
       if (
         document.evaluate(
           xpath,
@@ -138,7 +149,7 @@ function getOptimizedXPath(element) {
     }
   }
 
-  // Priority 6: Combination attributes (more specific)
+  // Priority 6: Combination attributes
   if (element.className && element.getAttribute("type")) {
     const type = element.getAttribute("type");
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
@@ -147,7 +158,7 @@ function getOptimizedXPath(element) {
     );
 
     if (meaningfulClass) {
-      const xpath = `//${element.tagName.toLowerCase()}[@type="${type}" and contains(@class,"${meaningfulClass}")]`;
+      const xpath = `//${element.tagName.toLowerCase()}[@type=${escapeXPathString(type)} and contains(@class,${escapeXPathString(meaningfulClass)})]`;
       if (
         document.evaluate(
           xpath,
@@ -162,7 +173,7 @@ function getOptimizedXPath(element) {
     }
   }
 
-  // Fallback: Generate structural path with optimizations
+  // Fallback: Generate structural path
   return getStructuralXPath(element);
 }
 
@@ -194,20 +205,15 @@ function getStructuralXPath(element) {
   return `${parentPath}/${element.tagName.toLowerCase()}${position}`;
 }
 
-// Generate multiple XPath options for better reliability
+// Generate multiple XPath options
 function generateXPathOptions(element) {
-  console.log("generateXPathOptions: Starting for element:", element);
   const options = [];
 
   try {
-    // Add the optimized XPath
     const optimized = getOptimizedXPath(element);
-    console.log("generateXPathOptions: Optimized XPath:", optimized);
     options.push({ type: "Optimized", xpath: optimized, strategy: "xpath" });
 
-    // Add alternative short XPaths
     const alternatives = generateAlternativeXPaths(element);
-    console.log("generateXPathOptions: Alternatives:", alternatives);
     alternatives.forEach((alt) => {
       if (
         alt.xpath !== optimized &&
@@ -217,9 +223,7 @@ function generateXPathOptions(element) {
       }
     });
 
-    // Add structural XPath as fallback (only if it's not too long)
     const structural = getStructuralXPath(element);
-    console.log("generateXPathOptions: Structural XPath:", structural);
     if (structural !== optimized && structural.split("/").length < 8) {
       options.push({
         type: "Structural",
@@ -228,10 +232,8 @@ function generateXPathOptions(element) {
       });
     }
 
-    // Add CSS selector equivalent if useful
     try {
       const cssSelector = getCSSSelector(element);
-      console.log("generateXPathOptions: CSS Selector:", cssSelector);
       if (cssSelector && cssSelector.length < 100) {
         options.push({
           type: "CSS Selector",
@@ -240,10 +242,9 @@ function generateXPathOptions(element) {
         });
       }
     } catch (e) {
-      console.log("generateXPathOptions: CSS selector generation failed:", e);
+      // CSS selector generation failed
     }
 
-    console.log("generateXPathOptions: Final options:", options);
     const shadowLocator = buildShadowLocator(element);
     if (
       shadowLocator &&
@@ -270,10 +271,12 @@ function generateXPathOptions(element) {
 
     return options;
   } catch (error) {
-    console.error("generateXPathOptions: Error generating XPaths:", error);
-    // Return at least one option as fallback
     return [
-      { type: "Basic", xpath: getStructuralXPath(element), strategy: "xpath" },
+      {
+        type: "Basic",
+        xpath: getStructuralXPath(element),
+        strategy: "xpath",
+      },
     ];
   }
 }
@@ -294,39 +297,42 @@ function generateAlternativeXPaths(element) {
     if (value && value.length < 50) {
       alternatives.push({
         type: `By ${attr}`,
-        xpath: `//${element.tagName.toLowerCase()}[@${attr}="${value}"]`,
+        xpath: `//${element.tagName.toLowerCase()}[@${attr}=${escapeXPathString(value)}]`,
         strategy: "xpath",
       });
-      break; // Only add one attribute-based alternative
+      break;
     }
   }
 
   // Alternative 2: Tag + partial class match
-  if (element.className) {
+  if (element.className && typeof element.className === "string") {
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
     const meaningfulClass = classes.find(
       (cls) =>
-        cls.length > 3 && !cls.match(/^(d-|flex|text-|bg-|border-|p-|m-|col-)/)
+        cls.length > 3 &&
+        !cls.match(/^(d-|flex|text-|bg-|border-|p-|m-|col-)/)
     );
 
     if (meaningfulClass) {
       alternatives.push({
         type: "By class",
-        xpath: `//${element.tagName.toLowerCase()}[contains(@class,"${meaningfulClass}")]`,
+        xpath: `//${element.tagName.toLowerCase()}[contains(@class,${escapeXPathString(meaningfulClass)})]`,
         strategy: "xpath",
       });
     }
   }
 
-  // Alternative 3: Text content (for buttons, links, etc.)
+  // Alternative 3: Text content
   if (
-    ["BUTTON", "A", "SPAN", "LABEL", "H1", "H2", "H3"].includes(element.tagName)
+    ["BUTTON", "A", "SPAN", "LABEL", "H1", "H2", "H3"].includes(
+      element.tagName
+    )
   ) {
     const text = element.textContent?.trim();
     if (text && text.length > 2 && text.length < 30) {
       alternatives.push({
         type: "By text",
-        xpath: `//${element.tagName.toLowerCase()}[contains(text(),"${text}")]`,
+        xpath: `//${element.tagName.toLowerCase()}[contains(text(),${escapeXPathString(text)})]`,
         strategy: "xpath",
       });
     }
@@ -339,7 +345,6 @@ function generateAlternativeXPaths(element) {
     );
     const position = Array.from(similarElements).indexOf(element) + 1;
     if (position > 0 && position <= 5) {
-      // Only if it's among the first 5
       alternatives.push({
         type: "By position",
         xpath: `(//${element.tagName.toLowerCase()})[${position}]`,
@@ -389,13 +394,6 @@ function getCSSSelector(element) {
   return path.length > 0 ? path.join(" > ") : null;
 }
 
-function escapeSelector(selector) {
-  if (!selector) {
-    return "";
-  }
-  return selector.replace(/'/g, "\\'");
-}
-
 function buildShadowLocator(element) {
   if (!element) {
     return null;
@@ -437,7 +435,8 @@ function buildShadowLocator(element) {
   let expression = "document";
 
   chain.forEach((step, index) => {
-    const normalized = escapeSelector(step.selector);
+    // Use CSS.escape via the selector which was already built with CSS.escape
+    const normalized = step.selector.replace(/'/g, "\\'");
     expression += `.querySelector('${normalized}')`;
     if (index !== chain.length - 1) {
       expression += ".shadowRoot";
@@ -498,12 +497,12 @@ function describeFrameElement(frameEl) {
   }
 
   if (frameEl.name) {
-    return `${frameEl.tagName.toLowerCase()}[name="${frameEl.name}"]`;
+    return `${frameEl.tagName.toLowerCase()}[name=${escapeXPathString(frameEl.name)}]`;
   }
 
   const src = frameEl.getAttribute("src");
   if (src) {
-    return `${frameEl.tagName.toLowerCase()}[src="${src}"]`;
+    return `${frameEl.tagName.toLowerCase()}[src=${escapeXPathString(src)}]`;
   }
 
   const parent = frameEl.parentElement;
@@ -583,7 +582,6 @@ function buildElementInfo(element, context) {
 function buildContext(element) {
   const frame = getFrameMetadata();
   const shadow = buildShadowContext(element);
-
   return { frame, shadow };
 }
 
@@ -591,12 +589,7 @@ function gatherSelectionData(element) {
   const xpaths = generateXPathOptions(element);
   const context = buildContext(element);
   const elementInfo = buildElementInfo(element, context);
-
-  return {
-    xpaths,
-    context,
-    elementInfo,
-  };
+  return { xpaths, context, elementInfo };
 }
 
 function getComposedPathTarget(event) {
@@ -610,20 +603,19 @@ function getComposedPathTarget(event) {
   return event.target instanceof Element ? event.target : null;
 }
 
-// Visual highlighting and performance optimization
+// State management
 let highlightedElement = null;
 let lastElement = null;
 let throttleTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
-let lockedElement = null; // Track locked element
-let isLocked = false; // Track if element is locked
-let isPopupOpen = false; // Track if popup is open
-let hoverEnabled = false; // Track if hover detection should be active
-let listenersAttached = false; // Track if hover listeners are attached
-let hoverPreference = true; // Track desired hover state from popup toggle
+let lockedElement = null;
+let isLocked = false;
+let isPanelOpen = false;
+let hoverEnabled = false;
+let listenersAttached = false;
+let hoverPreference = true;
 
-// Cleanup function to remove event listeners and highlights
 function cleanup() {
   isExtensionValid = false;
   removeHighlight();
@@ -638,10 +630,7 @@ function cleanup() {
     contextCheckInterval = null;
   }
 
-  // Detach hover listeners if present
   detachHoverListeners();
-
-  console.log("Pathfinder-X content script cleaned up");
 }
 
 function attachHoverListeners() {
@@ -651,7 +640,6 @@ function attachHoverListeners() {
   document.addEventListener("click", handleClick, { passive: false });
   document.addEventListener("keydown", handleKeyDown, { passive: false });
   listenersAttached = true;
-  console.log("Content script: Hover listeners attached");
 }
 
 function detachHoverListeners() {
@@ -661,8 +649,8 @@ function detachHoverListeners() {
   document.removeEventListener("click", handleClick);
   document.removeEventListener("keydown", handleKeyDown);
   listenersAttached = false;
-  console.log("Content script: Hover listeners detached");
 }
+
 function createHighlightOverlay() {
   const overlay = document.createElement("div");
   overlay.id = "pathfinder-x-highlight";
@@ -715,16 +703,14 @@ function removeHighlight() {
   }
 }
 
-// Throttled mouseover handler for performance
+// Throttled mouseover handler
 function handleMouseOver(event) {
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Only process hover events if popup is open, hover is enabled, and not locked
-  if (!isPopupOpen || !hoverEnabled || isLocked) {
+  if (!isPanelOpen || !hoverEnabled || isLocked) {
     return;
   }
 
@@ -734,29 +720,28 @@ function handleMouseOver(event) {
     return;
   }
 
-  // Skip if same element or if it's our highlight overlay
   if (element === lastElement || element.id === "pathfinder-x-highlight") {
     return;
   }
 
   lastElement = element;
 
-  // Clear previous timeout
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
   }
 
-  // Throttle XPath generation but highlight immediately
   highlightElement(element);
-  updateHighlightStyle(false); // Ensure it's the default highlight
+  updateHighlightStyle(false);
 
   throttleTimeout = setTimeout(() => {
-    console.log("Content script: Generating XPath for element:", element);
+    // Verify element is still in the DOM
+    if (!element.isConnected) {
+      return;
+    }
+
     const payload = gatherSelectionData(element);
-    console.log("Content script generated payload:", payload);
 
     if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
-      console.error("Content script: No XPath options generated!");
       return;
     }
 
@@ -767,76 +752,59 @@ function handleMouseOver(event) {
       context: payload.context,
     };
 
-    console.log("Content script sending message:", message);
-
-    // Send message with error handling
     try {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          console.log(
-            "Content script: Runtime error:",
-            chrome.runtime.lastError
-          );
-          cleanup();
-        }
+      chrome.runtime.sendMessage(message, () => {
+        // Suppress transient errors — context check interval handles real invalidation
+        void chrome.runtime.lastError;
       });
     } catch (error) {
-      console.log("Content script: Exception sending message:", error);
-      cleanup();
+      // Extension context may have been invalidated
     }
-  }, 50); // 50ms throttle
+  }, 50);
 }
 
 function handleMouseOut(event) {
-  // Only clear highlight if not locked
   if (isLocked) return;
 
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Only process mouseout events if popup is open and hover is enabled
-  if (!isPopupOpen || !hoverEnabled) {
+  if (!isPanelOpen || !hoverEnabled) {
     return;
   }
 
-  // Only remove highlight if we're not moving to a child element
-  if (
-    !event.relatedTarget ||
-    !event.currentTarget.contains(event.relatedTarget)
-  ) {
-    removeHighlight();
-    lastElement = null;
+  // Check if the mouse left the current element (not just moved to a child)
+  const relatedTarget = event.relatedTarget;
+  if (relatedTarget && lastElement && lastElement.contains(relatedTarget)) {
+    return;
+  }
 
-    if (throttleTimeout) {
-      clearTimeout(throttleTimeout);
-      throttleTimeout = null;
-    }
+  removeHighlight();
+  lastElement = null;
 
-    // Send message with error handling
-    try {
-      chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, (response) => {
-        if (chrome.runtime.lastError) {
-          cleanup();
-        }
-      });
-    } catch (error) {
-      cleanup();
-    }
+  if (throttleTimeout) {
+    clearTimeout(throttleTimeout);
+    throttleTimeout = null;
+  }
+
+  try {
+    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {
+    // Extension context may have been invalidated
   }
 }
 
 function handleClick(event) {
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Only process click events if popup is open and hover is enabled
-  if (!isPopupOpen || !hoverEnabled) {
+  if (!isPanelOpen || !hoverEnabled) {
     return;
   }
 
@@ -846,7 +814,6 @@ function handleClick(event) {
     return;
   }
 
-  // Skip if clicking on certain elements
   if (
     element.tagName === "HTML" ||
     element.tagName === "BODY" ||
@@ -856,34 +823,25 @@ function handleClick(event) {
     return;
   }
 
-  // Prevent default action and stop propagation to avoid interfering with page
   event.preventDefault();
   event.stopPropagation();
 
-  // Lock the element
   lockElement(element);
 }
 
-// Add a new function to handle locking the element
 function lockElement(element) {
-  if (isLocked) return; // Already locked
+  if (isLocked) return;
 
   isLocked = true;
   lockedElement = element;
   hoverEnabled = false;
 
-  // Highlight the locked element
   highlightElement(lockedElement);
-  updateHighlightStyle(true); // Use locked style
+  updateHighlightStyle(true);
 
   const payload = gatherSelectionData(lockedElement);
-  console.log("Content script: Element locked", lockedElement);
-  console.log("Content script generated payload for locked element:", payload);
 
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
-    console.error(
-      "Content script: No XPath options generated for locked element!"
-    );
     return;
   }
 
@@ -894,37 +852,27 @@ function lockElement(element) {
     context: payload.context,
   };
 
-  console.log("Content script sending locked message:", message);
-
-  // Send locked message to background script
   try {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        console.log("Error sending locked message:", chrome.runtime.lastError);
-        cleanup();
-      }
+    chrome.runtime.sendMessage(message, () => {
+      void chrome.runtime.lastError;
     });
   } catch (error) {
-    console.log("Exception sending locked message:", error);
-    cleanup();
+    // Extension context may have been invalidated
   }
 
   try {
     chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: true });
   } catch (error) {
-    console.log("Content script: Failed to sync lock state", error);
+    // Lock sync failed
   }
 }
 
-// Add a new function to handle keydown events for locking
 function handleKeyDown(event) {
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Lock on Shift key press, but only if an element is being hovered
   if (event.key === "Shift" && lastElement && !isLocked) {
     event.preventDefault();
     event.stopPropagation();
@@ -932,52 +880,45 @@ function handleKeyDown(event) {
   }
 }
 
-// Function to unlock element
 function unlockElement() {
   isLocked = false;
   lockedElement = null;
   removeHighlight();
 
-  // Send unlock message to popup
   try {
-    chrome.runtime.sendMessage({ type: "XPATH_UNLOCKED" }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.log("Error sending unlock message:", chrome.runtime.lastError);
-        cleanup();
-      }
+    chrome.runtime.sendMessage({ type: "XPATH_UNLOCKED" }, () => {
+      void chrome.runtime.lastError;
     });
   } catch (error) {
-    console.log("Exception sending unlock message:", error);
-    cleanup();
+    // Extension context may have been invalidated
   }
 
-  // Re-enable hover detection
   hoverEnabled = hoverPreference;
-  console.log("Content script: Element unlocked, hover detection re-enabled");
 
   try {
     chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: false });
   } catch (error) {
-    console.log("Content script: Failed to broadcast unlock state", error);
+    // Lock sync failed
   }
 }
 
-// Listen for messages from popup
+// Listen for messages from side panel and background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "PING") {
+    sendResponse({ success: true });
+    return;
+  }
+
   if (message.type === "UNLOCK_ELEMENT") {
     unlockElement();
     sendResponse({ success: true });
-  } else if (message.type === "POPUP_OPENED") {
-    isPopupOpen = true;
-    // Enable hover by default when popup opens (will be disabled if toggle is off)
+  } else if (message.type === "PANEL_OPENED") {
+    isPanelOpen = true;
     hoverEnabled = hoverPreference && !isLocked;
     attachHoverListeners();
-    console.log(
-      "Content script: Popup opened, listeners attached, hover enabled"
-    );
     sendResponse({ success: true });
-  } else if (message.type === "POPUP_CLOSED") {
-    isPopupOpen = false;
+  } else if (message.type === "PANEL_CLOSED") {
+    isPanelOpen = false;
     hoverEnabled = false;
     if (isLocked) {
       unlockElement();
@@ -985,21 +926,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     removeHighlight();
     lastElement = null;
     detachHoverListeners();
-    console.log("Content script: Popup closed, hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "ENABLE_HOVER") {
     hoverPreference = true;
     if (!isLocked) {
       hoverEnabled = true;
+      isPanelOpen = true;
+      attachHoverListeners();
     }
-    console.log("Content script: Hover detection enabled");
     sendResponse({ success: true });
   } else if (message.type === "DISABLE_HOVER") {
     hoverPreference = false;
     hoverEnabled = false;
+    // If locked, fully release the lock so state doesn't go stale
+    if (isLocked) {
+      isLocked = false;
+      lockedElement = null;
+    }
     removeHighlight();
     lastElement = null;
-    console.log("Content script: Hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "LOCK_STATE_SYNC") {
     if (message.locked) {
@@ -1018,10 +963,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Initialize the extension if context is valid
+// Initialize
 if (initializeContentScript()) {
-  // Do NOT attach hover listeners yet; wait for popup to open
-
   const canUseUnloadHandlers =
     typeof window.fence === "undefined" &&
     !(document && document.fencedframeElement);
@@ -1037,25 +980,16 @@ if (initializeContentScript()) {
   if (canUseUnloadHandlers) {
     window.addEventListener("beforeunload", handleUnload);
     window.addEventListener("unload", handleUnload);
-  } else {
-    console.log(
-      "Pathfinder-X: Skipping unload handlers due to fenced frame restrictions"
-    );
   }
 
-  console.log(
-    "Pathfinder-X: Base content script setup complete; listeners will attach when popup opens"
-  );
-
-  // Periodic check for extension context (every 5 seconds)
+  // Check extension context lazily — only when interaction is happening
+  // instead of polling every 5 seconds on every page
   contextCheckInterval = setInterval(() => {
+    if (!isPanelOpen) return; // Only check when panel is active
     if (!checkExtensionContext()) {
-      console.log("Pathfinder-X: Extension context lost, cleaning up...");
       cleanup();
     }
-  }, 5000);
-} else {
-  console.log(
-    "Pathfinder-X: Skipping event listener setup due to invalid context"
-  );
+  }, 10000);
 }
+
+} // end double-initialization guard

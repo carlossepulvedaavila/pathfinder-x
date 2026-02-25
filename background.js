@@ -1,9 +1,21 @@
 // Background service worker for Pathfinder-X
-// Handles communication between content script and popup
+// Handles communication between content script and side panel
 
-// Handle messages from content script and forward to popup
+// Open side panel when extension icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ tabId: tab.id });
+});
+
+// Set side panel behavior — open on action click
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+// Handle messages from content script and forward to side panel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("Background received message:", message);
+  // Only accept messages from our own extension
+  if (sender.id !== chrome.runtime.id) {
+    sendResponse({ success: false, error: "Unknown sender" });
+    return false;
+  }
 
   if (message.type === "LOCK_STATE_SYNC") {
     const tabId = sender?.tab?.id;
@@ -15,11 +27,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
       if (chrome.runtime.lastError) {
-        console.log(
-          "Background: Failed to enumerate frames for lock sync:",
-          chrome.runtime.lastError
-        );
-        sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        sendResponse({
+          success: false,
+          error: chrome.runtime.lastError.message,
+        });
         return;
       }
 
@@ -29,12 +40,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           { type: "LOCK_STATE_SYNC", locked: message.locked },
           { frameId: frame.frameId },
           () => {
-            if (chrome.runtime.lastError) {
-              console.log(
-                `Background: Failed to sync lock state to frame ${frame.frameId}:`,
-                chrome.runtime.lastError
-              );
-            }
+            // Suppress errors for frames that don't have the content script
+            void chrome.runtime.lastError;
           }
         );
       });
@@ -49,11 +56,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message.type === "XPATH_FOUND" ||
     message.type === "XPATH_CLEAR" ||
     message.type === "XPATH_LOCKED" ||
-    message.type === "XPATH_UNLOCKED" ||
-    message.type === "XPATH_SELECTED"
+    message.type === "XPATH_UNLOCKED"
   ) {
-    console.log("Background: Processing", message.type, "message");
-
     const enrichedMessage = {
       ...message,
       context: {
@@ -67,29 +71,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       },
     };
 
-    // Store the message for when popup opens
-    chrome.storage.local.set({ lastMessage: enrichedMessage }, () => {
-      console.log("Background: Stored message in local storage");
+    // Store per-tab so each tab's locked state is independent
+    const tabId = sender?.tab?.id;
+    const storageKey = tabId ? `tabState_${tabId}` : "tabState_unknown";
+    chrome.storage.local.set({ [storageKey]: enrichedMessage }, () => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ success: false });
+        return;
+      }
       sendResponse({ success: true });
     });
 
-    // Try to send message to popup if it's open
+    // Forward to side panel if it's open
     try {
-      chrome.runtime
-        .sendMessage(enrichedMessage)
-        .catch(() => {
-          // Popup might not be open, which is fine
-          console.log("Background: Popup not open, message stored for later");
-        });
+      chrome.runtime.sendMessage(enrichedMessage).catch(() => {
+        // Side panel might not be open
+      });
     } catch (error) {
-      console.log("Background: Error sending to popup:", error);
+      // Side panel not available
     }
+
+    return true; // Keep channel open for async storage callback
   }
 
-  return true; // Keep message channel open for async response
+  return false;
 });
 
-// Optional: Add context menu item for easier access
+// Context menu item for easier access
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "pathfinder-xpath",
@@ -100,6 +108,6 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "pathfinder-xpath") {
-    chrome.action.openPopup();
+    chrome.sidePanel.open({ tabId: tab.id });
   }
 });

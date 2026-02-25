@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Pathfinder-X</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+
+  <body>
+    <main class="modal__background">
+      <div class="header">
+        <div class="header__top">
+          <div class="title__container">
+            <img
+              class="title__icon"
+              src="./images/icon_ext.png"
+              alt="Pathfinder-X Icon"
+            />
+            <h3 class="title__text">PATHFINDER-X</h3>
+          </div>
+          <div class="toggle-container">
+            <input type="checkbox" id="toggle" class="toggle-input" />
+            <label for="toggle" class="toggle-label"></label>
+          </div>
+        </div>
+
+        <div class="status" id="status">Ready</div>
+      </div>
+
+      <div class="modal__content">
+        <div class="lock-controls" id="lockControls" style="display: none">
+          <div class="lock-status">
+            <span>Element Locked</span>
+          </div>
+          <button class="unlock-btn" id="unlockButton">Unlock</button>
+        </div>
+
+        <div class="element-info" id="elementInfo">
+          <div><strong>Element:</strong> <span id="elementTag"></span></div>
+          <div><strong>Text:</strong> <span id="elementText"></span></div>
+          <div id="frameInfoRow" class="element-meta" style="display: none">
+            <strong>Frame:</strong> <span id="frameInfo"></span>
+          </div>
+          <div id="shadowInfoRow" class="element-meta" style="display: none">
+            <strong>Shadow:</strong> <span id="shadowInfo"></span>
+          </div>
+        </div>
+
+        <div id="xpathContainer">
+          <div class="placeholder">
+            <img
+              class="placeholder__icon"
+              src="./images/hover-icon.png"
+              alt="Hover Icon"
+            />
+
+            <p>
+              <strong>Hover over any element on the webpage</strong><br />
+              to generate XPath selectors optimized for Playwright and Selenium.
+            </p>
+          </div>
+        </div>
+
+        <button class="clear-all" id="clearButton" style="display: none">
+          CLEAR ALL
+        </button>
+      </div>
+    </main>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

@@ -1,11 +1,17 @@
 body {
-  width: 400px;
-  max-height: 1000px;
-  font-family: "Red Hat Display", sans-serif;
+  width: 100%;
+  min-width: 280px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   margin: 0;
-  padding: 6px;
+  padding: 0;
   overflow-y: auto;
-  border-radius: 17px;
+}
+
+.modal__background {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 .header {
@@ -15,8 +21,7 @@ body {
   background-color: #301e88;
   color: white;
   padding: 10px 7px 10px 12px;
-  border-radius: 17px 17px 0px 0px;
-  box-shadow: 5px 5px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .header__top {
@@ -47,9 +52,7 @@ body {
   font-size: 12px;
   color: #787878;
   background: #bababa;
-  padding: 4px 8px;
   border-radius: 12px;
-
   display: flex;
   align-items: center;
   gap: 6px;
@@ -64,12 +67,9 @@ body {
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-
-  /* Default Icon (Gray) */
   background-image: url("./images/hover-icon_disabled.png");
 }
 
-/* Icon for ACTIVE state (Hovering Enabled) - Green */
 .status.active::before {
   background-image: url("./images/hover-icon_active.png");
 }
@@ -92,11 +92,13 @@ body {
 }
 
 .status.active.locked::before {
-   background-image: url("./images/icon-locked-s.png");
+  background-image: url("./images/icon-locked-s.png");
 }
 
 .modal__content {
   background-color: #f4f4f6;
+  flex: 1;
+  padding-bottom: 8px;
 }
 
 .element-info {
@@ -124,16 +126,14 @@ body {
 }
 
 .xpath-option {
-  background: white;
   background-color: #301e88;
   border: 1px solid #ddd;
   border-radius: 12px;
-  margin-bottom: 2px;
+  margin: 0 6px 2px;
   overflow: hidden;
 }
 
 .xpath-header {
-  background: #f8f9fa;
   background-color: #301e88;
   padding: 5px 12px;
   font-weight: 800;
@@ -146,7 +146,7 @@ body {
 
 .xpath-content {
   padding: 10px;
-  font-family: "Monaco", "Menlo", monospace;
+  font-family: "Monaco", "Menlo", "Courier New", monospace;
   font-size: 13px;
   word-wrap: break-word;
   background: #fdfdfd;
@@ -185,8 +185,6 @@ body {
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-
-  /* Copy Icon */
   background-image: url("./images/icon-copy.png");
 }
 
@@ -208,8 +206,6 @@ body {
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-
-  /* Copy Icon */
   background-image: url("./images/icon-copied.png");
 }
 
@@ -279,6 +275,7 @@ body {
   border-radius: 50px;
   font-size: 12px;
   cursor: pointer;
+  display: block;
 }
 
 .clear-all:hover {
@@ -290,6 +287,7 @@ body {
   border: 1px solid #ffeaa7;
   border-radius: 6px;
   padding: 4px 12px;
+  margin: 6px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -322,11 +320,6 @@ body {
 
 .unlock-btn:hover {
   background: #e0a800;
-}
-
-.locked .status {
-  background: #fff3cd;
-  color: #856404;
 }
 
 .toggle-container {
