@@ -873,16 +873,20 @@ function handleKeyDown(event) {
     return;
   }
 
-  if (event.key === "Shift" && lastElement && !isLocked) {
+  if (event.code === "Space" && isPanelOpen) {
     event.preventDefault();
-    event.stopPropagation();
-    lockElement(lastElement);
+    if (isLocked) {
+      unlockElement();
+    } else if (hoverEnabled && lastElement) {
+      lockElement(lastElement);
+    }
   }
 }
 
 function unlockElement() {
   isLocked = false;
   lockedElement = null;
+  lastElement = null;
   removeHighlight();
 
   try {

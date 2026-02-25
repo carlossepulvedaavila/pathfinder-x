@@ -27,6 +27,8 @@ body {
 .header__top {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 
 .title__container {
@@ -48,51 +50,11 @@ body {
   letter-spacing: 3.5px;
 }
 
-.status {
-  font-size: 12px;
-  color: #787878;
-  background: #bababa;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 4px 6px;
-}
-
-.status::before {
-  content: "";
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-image: url("./images/hover-icon_disabled.png");
-}
-
-.status.active::before {
-  background-image: url("./images/hover-icon_active.png");
-}
-
-.status.active {
-  background: #e8f5e8;
-  color: #2d5a2d;
-}
-
-.status.active.selected {
-  background: #d4edda;
-  color: #155724;
-  border: 1px solid #c3e6cb;
-}
-
-.status.active.locked {
-  background: #fff3cd;
-  color: #856404;
-  border: 1px solid #ffeaa7;
-}
-
-.status.active.locked::before {
-  background-image: url("./images/icon-locked-s.png");
+.toggle-text {
+  font-size: 11px;
+  color: #c4b8f0;
+  letter-spacing: 1px;
+  font-weight: 500;
 }
 
 .modal__content {
@@ -325,6 +287,7 @@ body {
 .toggle-container {
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .toggle-input {

@@ -2,23 +2,23 @@
 
 ## Project Structure & Module Organization
 - `manifest.json`: Extension manifest; update permissions, icons, and metadata in sync.
-- `background.js`: Service worker relaying messages between content and popup, persisting the last payload, and owning the context menu entry.
-- `content.js`: DOM-facing logic that attaches hover listeners, generates optimized XPaths, and posts updates back to the runtime.
-- `popup.html`, `popup.js`, `styles.css`: UI surface rendered in the action popup; keep markup, scripts, and styling aligned when adjusting components.
+- `background.js`: Service worker relaying messages between content script and side panel, detecting panel close via port disconnect, and owning the context menu entry.
+- `content.js`: DOM-facing logic that attaches hover/click/Space listeners, generates optimized XPaths, and posts updates back to the runtime.
+- `sidepanel.html`, `sidepanel.js`, `styles.css`: UI surface rendered in Chrome's side panel; keep markup, scripts, and styling aligned when adjusting components.
 - `images/`: Source for action and UI artwork (16/48/128). Replace all sizes together to avoid manifest warnings.
 - `README.md`: Contributor entry point; mirror any workflow or load-step changes here.
 
 ## Build, Test, and Development Commands
 - No bundler is required. Edit files directly and reload the unpacked extension to see changes.
 - Load locally via `chrome://extensions` → enable Developer Mode → **Load unpacked** → repository root.
-- Inspect background events with Chrome DevTools → **Service Worker** and debug the popup via **Inspect views** > `popup.html`.
+- Inspect background events with Chrome DevTools → **Service Worker** and debug the side panel via **Inspect views** > `sidepanel.html`.
 - Package for release with `mkdir -p dist && zip -r dist/pathfinder-x.zip . -x ".git/*" "dist/*"` from repo root.
 
 ## Coding Style & Naming Conventions
 - JavaScript uses 2-space indentation, `camelCase` for identifiers, and `SCREAMING_SNAKE_CASE` only for immutable constants.
 - Prefer `const`/`let` over `var`; keep functions focused and reusable.
 - Default to double quotes; reserve template literals for interpolated XPath strings.
-- UI class names follow existing `popup-*` and `btn-*` patterns; reuse tokens before inventing new ones.
+- UI class names follow existing BEM-style patterns (e.g., `header__top`, `toggle-container`); reuse tokens before inventing new ones.
 - Leave concise `//` comments when logic (e.g., XPath heuristics) is non-obvious.
 
 ## Testing Guidelines

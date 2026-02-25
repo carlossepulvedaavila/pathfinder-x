@@ -10,7 +10,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   const frameInfo = document.getElementById("frameInfo");
   const shadowInfoRow = document.getElementById("shadowInfoRow");
   const shadowInfo = document.getElementById("shadowInfo");
-  const status = document.getElementById("status");
   const clearButton = document.getElementById("clearButton");
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
@@ -141,12 +140,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       if (locked) {
         isLocked = true;
-        status.textContent = "Element Locked";
-        status.className = "status active locked";
         lockControls.style.display = "flex";
-      } else {
-        status.textContent = "Hover for XPath";
-        status.className = "status active";
       }
     } else {
       clearDisplay();
@@ -195,8 +189,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           false,
           message.context
         );
-        status.textContent = "Hovering - click to select";
-        status.className = "status active";
       }
     } else if (message.type === "XPATH_LOCKED") {
       isLocked = true;
@@ -206,14 +198,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         true,
         message.context
       );
-      status.textContent = "Element Locked";
-      status.className = "status active locked";
       lockControls.style.display = "flex";
     } else if (message.type === "XPATH_CLEAR") {
       if (!isLocked) {
         clearDisplay();
-        status.textContent = "Hover for XPath";
-        status.className = "status active";
       }
     } else if (message.type === "XPATH_UNLOCKED") {
       isLocked = false;
@@ -381,12 +369,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const strong = document.createElement("strong");
     strong.textContent = isLocked
       ? "Element is locked."
-      : "Hover over any element on the page";
+      : "Hover over any element on the webpage";
     const br = document.createElement("br");
     const text = document.createTextNode(
       isLocked
         ? " Click 'Unlock' to resume hover detection."
-        : " to generate XPath selectors optimized for Playwright and Selenium."
+        : " Click or press Space to lock and generate XPath selectors."
     );
 
     p.appendChild(strong);
@@ -401,8 +389,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!isLocked) {
       lockControls.style.display = "none";
     }
-    status.textContent = isLocked ? "Element Locked" : "Hover for XPath";
-    status.className = isLocked ? "status active locked" : "status active";
     currentXPaths = [];
     currentContext = null;
     clearContextDisplay();
@@ -549,8 +535,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
       chrome.storage.local.set({ isHoveringEnabled: true });
-      status.textContent = "Hovering Enabled";
-      status.className = "status active";
     } catch (error) {
       // Enable failed
     }
@@ -565,8 +549,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         isLocked = false;
         lockControls.style.display = "none";
       }
-      status.textContent = "Hovering Disabled";
-      status.className = "status";
     } catch (error) {
       // Disable failed
     }
@@ -624,11 +606,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Clear state when the page navigates within the same tab (element no longer exists)
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-    if (changeInfo.status !== "loading") return;
     try {
       const tab = await getActiveTab();
       if (!tab || tab.id !== tabId) return;
-      resetForNavigation(tabId);
+
+      if (changeInfo.status === "loading") {
+        resetForNavigation(tabId);
+      } else if (changeInfo.status === "complete") {
+        // Re-inject content script and restore hover after page load
+        await ensureContentScriptInjected();
+        await sendMessageToAllFrames({ type: "PANEL_OPENED" });
+        const result = await chrome.storage.local.get("isHoveringEnabled");
+        if (!result || result.isHoveringEnabled !== false) {
+          await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
+        }
+      }
     } catch (error) {
       // Tab update handling failed
     }
