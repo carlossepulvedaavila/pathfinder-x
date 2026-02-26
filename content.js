@@ -38,147 +38,6 @@ function escapeXPathString(str) {
   return `concat(${segments.join(",")})`;
 }
 
-// V1 XPath generation (original cascade)
-function getOptimizedXPathV1(element) {
-  // Priority 1: Use ID if available and unique
-  if (
-    element.id &&
-    document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1
-  ) {
-    return `//*[@id=${escapeXPathString(element.id)}]`;
-  }
-
-  // Priority 2: Use data-testid or similar test attributes
-  const testAttributes = ["data-testid", "data-test", "data-cy", "data-qa"];
-  for (const attr of testAttributes) {
-    const value = element.getAttribute(attr);
-    if (value) {
-      return `//*[@${attr}=${escapeXPathString(value)}]`;
-    }
-  }
-
-  // Priority 3: Use single meaningful class (common pattern)
-  if (element.className && typeof element.className === "string") {
-    const classes = element.className.trim().split(/\s+/).filter(Boolean);
-
-    const meaningfulClasses = classes.filter(
-      (cls) =>
-        cls.length > 2 &&
-        !cls.match(
-          /^(d-|flex-|text-|bg-|border-|p-|m-|col-|row-|btn-secondary|btn-primary)/
-        ) &&
-        !cls.match(/^[a-z]{1,2}$/)
-    );
-
-    for (const cls of meaningfulClasses) {
-      const xpath = `//*[@class=${escapeXPathString(cls)}]`;
-      if (
-        document.evaluate(
-          xpath,
-          document,
-          null,
-          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-          null
-        ).snapshotLength === 1
-      ) {
-        return xpath;
-      }
-    }
-
-    for (const cls of meaningfulClasses.slice(0, 3)) {
-      const xpath = `//${element.tagName.toLowerCase()}[contains(@class,${escapeXPathString(cls)})]`;
-      if (
-        document.evaluate(
-          xpath,
-          document,
-          null,
-          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-          null
-        ).snapshotLength === 1
-      ) {
-        return xpath;
-      }
-    }
-  }
-
-  // Priority 4: Use unique attributes with tag name for specificity
-  const uniqueAttrs = [
-    "name",
-    "type",
-    "aria-label",
-    "title",
-    "alt",
-    "placeholder",
-    "role",
-  ];
-  for (const attr of uniqueAttrs) {
-    const value = element.getAttribute(attr);
-    if (value) {
-      const xpath = `//${element.tagName.toLowerCase()}[@${attr}=${escapeXPathString(value)}]`;
-      if (
-        document.evaluate(
-          xpath,
-          document,
-          null,
-          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-          null
-        ).snapshotLength === 1
-      ) {
-        return xpath;
-      }
-    }
-  }
-
-  // Priority 5: Use text content for clickable elements
-  if (
-    ["A", "BUTTON", "SPAN", "LABEL"].includes(element.tagName) &&
-    element.textContent
-  ) {
-    const text = element.textContent.trim();
-    if (text && text.length < 30 && text.length > 2) {
-      const xpath = `//${element.tagName.toLowerCase()}[normalize-space(text())=${escapeXPathString(text)}]`;
-      if (
-        document.evaluate(
-          xpath,
-          document,
-          null,
-          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-          null
-        ).snapshotLength === 1
-      ) {
-        return xpath;
-      }
-    }
-  }
-
-  // Priority 6: Combination attributes
-  if (element.className && element.getAttribute("type")) {
-    const type = element.getAttribute("type");
-    const classes = element.className.trim().split(/\s+/).filter(Boolean);
-    const meaningfulClass = classes.find(
-      (cls) => cls.length > 3 && !cls.match(/^(d-|flex-|text-|bg-)/)
-    );
-
-    if (meaningfulClass) {
-      const xpath = `//${element.tagName.toLowerCase()}[@type=${escapeXPathString(type)} and contains(@class,${escapeXPathString(meaningfulClass)})]`;
-      if (
-        document.evaluate(
-          xpath,
-          document,
-          null,
-          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-          null
-        ).snapshotLength === 1
-      ) {
-        return xpath;
-      }
-    }
-  }
-
-  // Fallback: Generate structural path
-  return getStructuralXPath(element);
-}
-
 function getStructuralXPath(element) {
   if (element.tagName === "HTML") {
     return "/html";
@@ -211,7 +70,7 @@ function isUniqueSelector(option) {
   try {
     if (option.strategy === "shadow") return true;
     if (option.strategy === "css") {
-      return document.querySelectorAll(option.xpath).length === 1;
+      return _activeDoc.querySelectorAll(option.xpath).length === 1;
     }
     return isUniqueXPath(option.xpath);
   } catch (e) {
@@ -226,22 +85,15 @@ function filterUniqueOptions(options) {
 }
 
 // Generate multiple XPath options
-function generateXPathOptions(element, engine) {
-  const activeEngine = engine || xpathEngine;
-  const getOptimized = activeEngine === "v1"
-    ? getOptimizedXPathV1
-    : getOptimizedXPathV2;
-  const getAlternatives = activeEngine === "v1"
-    ? generateAlternativeXPathsV1
-    : generateAlternativeXPathsV2;
+function generateXPathOptions(element) {
 
   const options = [];
 
   try {
-    const optimized = getOptimized(element);
+    const optimized = getOptimizedXPathV2(element);
     options.push({ type: "Optimized", xpath: optimized, strategy: "xpath" });
 
-    const alternatives = getAlternatives(element);
+    const alternatives = generateAlternativeXPathsV2(element);
     alternatives.forEach((alt) => {
       if (
         alt.xpath !== optimized &&
@@ -370,7 +222,7 @@ function generateAlternativeXPathsV1(element) {
 
   // Alternative 4: Position-based (only for common interactive elements)
   if (["INPUT", "BUTTON", "SELECT", "A"].includes(element.tagName)) {
-    const similarElements = document.querySelectorAll(
+    const similarElements = _activeDoc.querySelectorAll(
       element.tagName.toLowerCase()
     );
     const position = Array.from(similarElements).indexOf(element) + 1;
@@ -390,8 +242,8 @@ function generateAlternativeXPathsV1(element) {
 
 function isUniqueXPath(xpath) {
   try {
-    return document.evaluate(
-      xpath, document, null,
+    return _activeDoc.evaluate(
+      xpath, _activeDoc, null,
       XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
     ).snapshotLength === 1;
   } catch (e) {
@@ -451,12 +303,12 @@ function findStableAnchor(element) {
   let depth = 0;
   const MAX_DEPTH = 6;
 
-  while (current && current !== document.body && depth < MAX_DEPTH) {
+  while (current && current !== _activeDoc.body && depth < MAX_DEPTH) {
     depth++;
 
     if (current.id && isStableId(current.id)) {
       const escaped = CSS.escape(current.id);
-      if (document.querySelectorAll(`#${escaped}`).length === 1) {
+      if (_activeDoc.querySelectorAll(`#${escaped}`).length === 1) {
         return { element: current, xpath: `//*[@id=${escapeXPathString(current.id)}]`, depth };
       }
     }
@@ -526,7 +378,7 @@ function getOptimizedXPathV2(element) {
     const escaped = CSS.escape(element.id);
     if (
       isStableId(element.id) &&
-      document.querySelectorAll(`#${escaped}`).length === 1
+      _activeDoc.querySelectorAll(`#${escaped}`).length === 1
     ) {
       return `//*[@id=${escapeXPathString(element.id)}]`;
     }
@@ -670,7 +522,7 @@ function getOptimizedXPathV2(element) {
     }
 
     if (element.id) {
-      const label = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+      const label = _activeDoc.querySelector(`label[for="${CSS.escape(element.id)}"]`);
       if (label && label.textContent?.trim()) {
         const labelText = label.textContent.trim();
         const xpath = `//label[normalize-space(.)=${escapeXPathString(labelText)}]/following::${tag}[1]`;
@@ -736,7 +588,7 @@ function generateAlternativeXPathsV2(element) {
 
   // Alt 5: By position (interactive elements)
   if (["INPUT", "BUTTON", "SELECT", "A"].includes(element.tagName)) {
-    const similarElements = document.querySelectorAll(tag);
+    const similarElements = _activeDoc.querySelectorAll(tag);
     const position = Array.from(similarElements).indexOf(element) + 1;
     if (position > 0 && position <= 5) {
       alternatives.push({
@@ -761,7 +613,7 @@ function getCSSSelector(element) {
   while (
     current &&
     current.nodeType === Node.ELEMENT_NODE &&
-    current !== document.body
+    current !== _activeDoc.body
   ) {
     let selector = current.tagName.toLowerCase();
 
@@ -983,18 +835,58 @@ function buildContext(element) {
   return { frame, shadow };
 }
 
-function gatherSelectionData(element) {
-  const context = buildContext(element);
-  const elementInfo = buildElementInfo(element, context);
+function buildPeekContext(element, iframeEl) {
+  const iframeDoc = iframeEl.contentDocument;
+  const frame = {
+    isTopFrame: false,
+    url: iframeDoc?.URL || iframeEl.src || "",
+    origin: "",
+    selectors: [describeFrameElement(iframeEl)].filter(Boolean),
+    peekThrough: true,
+  };
 
-  if (comparisonMode) {
-    const xpaths = generateXPathOptions(element, "v2");
-    const v1Xpaths = generateXPathOptions(element, "v1");
-    return { xpaths, v1Xpaths, context, elementInfo, comparisonMode: true };
+  try {
+    frame.origin = iframeDoc?.location?.origin || "";
+  } catch (e) {
+    // Cross-origin location access
   }
 
-  const xpaths = generateXPathOptions(element);
-  return { xpaths, context, elementInfo };
+  // If the parent frame itself is nested, prepend parent's frame selectors
+  const parentFrameMeta = getFrameMetadata();
+  if (!parentFrameMeta.isTopFrame) {
+    frame.selectors = [...parentFrameMeta.selectors, ...frame.selectors];
+    if (!frame.origin) {
+      frame.origin = parentFrameMeta.origin;
+    }
+  }
+
+  const shadow = buildShadowContext(element);
+  return { frame, shadow };
+}
+
+function gatherSelectionData(element, iframeEl) {
+  const context = iframeEl
+    ? buildPeekContext(element, iframeEl)
+    : buildContext(element);
+  const elementInfo = buildElementInfo(element, context);
+  const elementDoc = element.ownerDocument || document;
+
+  const generate = () => {
+    if (comparisonMode) {
+      const xpaths = generateXPathOptions(element, "v2");
+      const v1Xpaths = generateXPathOptions(element, "v1");
+      return { xpaths, v1Xpaths, context, elementInfo, comparisonMode: true };
+    }
+    const xpaths = generateXPathOptions(element);
+    return { xpaths, context, elementInfo };
+  };
+
+  // If the element is from a different document (iframe peek-through),
+  // run XPath generation against that document.
+  if (elementDoc !== document) {
+    return withDocument(elementDoc, generate);
+  }
+  return generate();
 }
 
 function getComposedPathTarget(event) {
@@ -1039,7 +931,7 @@ function resolveSmartTarget(element) {
   let current = element.parentElement;
   let depth = 0;
 
-  while (current && current !== document.body && depth < 3) {
+  while (current && current !== (element.ownerDocument || document).body && depth < 3) {
     if (SEMANTIC_TARGETS.has(current.tagName)) return current;
 
     const parentRole = current.getAttribute("role");
@@ -1055,6 +947,21 @@ function resolveSmartTarget(element) {
   return element;
 }
 
+// Active document context for XPath generation.
+// Defaults to the current frame's document but is temporarily switched
+// when inspecting elements inside an iframe via peek-through overlays.
+let _activeDoc = document;
+
+function withDocument(doc, fn) {
+  const prev = _activeDoc;
+  _activeDoc = doc;
+  try {
+    return fn();
+  } finally {
+    _activeDoc = prev;
+  }
+}
+
 // State management
 let highlightedElement = null;
 let lastElement = null;
@@ -1062,6 +969,7 @@ let throttleTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
 let lockedElement = null;
+let lockedIframeEl = null;
 let isLocked = false;
 let isPanelOpen = false;
 let hoverEnabled = false;
@@ -1069,6 +977,10 @@ let listenersAttached = false;
 let hoverPreference = true;
 let xpathEngine = "v2";
 let comparisonMode = false;
+
+// Iframe peek-through overlay tracking
+let iframeOverlays = [];
+let iframeMutationObserver = null;
 
 function cleanup() {
   isExtensionValid = false;
@@ -1094,6 +1006,11 @@ function attachHoverListeners() {
   document.addEventListener("click", handleClick, { passive: false });
   document.addEventListener("keydown", handleKeyDown, { passive: false });
   listenersAttached = true;
+
+  createIframeOverlays();
+  startIframeObserver();
+  window.addEventListener("scroll", handleOverlayReposition, { passive: true });
+  window.addEventListener("resize", handleOverlayReposition, { passive: true });
 }
 
 function detachHoverListeners() {
@@ -1103,6 +1020,11 @@ function detachHoverListeners() {
   document.removeEventListener("click", handleClick);
   document.removeEventListener("keydown", handleKeyDown);
   listenersAttached = false;
+
+  removeIframeOverlays();
+  stopIframeObserver();
+  window.removeEventListener("scroll", handleOverlayReposition);
+  window.removeEventListener("resize", handleOverlayReposition);
 }
 
 function createHighlightOverlay() {
@@ -1157,6 +1079,307 @@ function removeHighlight() {
   }
 }
 
+// --- Iframe peek-through overlay system ---
+
+function isIframeAccessible(iframe) {
+  try {
+    const doc = iframe.contentDocument;
+    if (!doc) return false;
+    void doc.documentElement;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function positionOverlayOnIframe(overlay, iframe) {
+  const rect = iframe.getBoundingClientRect();
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+  overlay.style.top = (rect.top + scrollTop) + "px";
+  overlay.style.left = (rect.left + scrollLeft) + "px";
+  overlay.style.width = rect.width + "px";
+  overlay.style.height = rect.height + "px";
+}
+
+function createIframeOverlays() {
+  removeIframeOverlays();
+
+  const iframes = document.querySelectorAll("iframe");
+
+  iframes.forEach((iframe) => {
+    if (!isIframeAccessible(iframe)) return;
+
+    const overlay = document.createElement("div");
+    overlay.className = "pathfinder-x-iframe-overlay";
+    overlay.style.cssText = `
+      position: absolute;
+      background: transparent;
+      border: none;
+      pointer-events: auto;
+      z-index: 999998;
+      box-sizing: border-box;
+      cursor: default;
+    `;
+
+    positionOverlayOnIframe(overlay, iframe);
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener("mousemove", (e) => handleIframeMouseMove(e, iframe));
+    overlay.addEventListener("click", (e) => handleIframeClick(e, iframe));
+    overlay.addEventListener("mouseleave", (e) => handleIframeMouseLeave(e, iframe));
+
+    iframeOverlays.push({ overlay, iframe });
+  });
+}
+
+function removeIframeOverlays() {
+  iframeOverlays.forEach(({ overlay }) => {
+    overlay.remove();
+  });
+  iframeOverlays = [];
+}
+
+function repositionAllIframeOverlays() {
+  iframeOverlays.forEach(({ overlay, iframe }) => {
+    if (iframe.isConnected) {
+      positionOverlayOnIframe(overlay, iframe);
+    }
+  });
+}
+
+function handleOverlayReposition() {
+  repositionAllIframeOverlays();
+}
+
+// Compute the CSS transform scale factor between the iframe's layout size
+// and its visual (rendered) size. This handles cases where a parent applies
+// transform: scale() to fit the iframe into a smaller viewing area.
+function getIframeScale(iframe) {
+  const iframeRect = iframe.getBoundingClientRect();
+  const layoutWidth = iframe.offsetWidth;
+  const layoutHeight = iframe.offsetHeight;
+
+  if (layoutWidth === 0 || layoutHeight === 0) return { x: 1, y: 1 };
+
+  return {
+    x: iframeRect.width / layoutWidth,
+    y: iframeRect.height / layoutHeight,
+  };
+}
+
+function getIframeRelativeCoords(event, iframe) {
+  const iframeRect = iframe.getBoundingClientRect();
+  const scale = getIframeScale(iframe);
+  const style = window.getComputedStyle(iframe);
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+  const borderTop = parseFloat(style.borderTopWidth) || 0;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+
+  // Convert from parent visual coords to iframe's internal layout coords
+  return {
+    x: (event.clientX - iframeRect.left) / scale.x - borderLeft - paddingLeft,
+    y: (event.clientY - iframeRect.top) / scale.y - borderTop - paddingTop,
+  };
+}
+
+function highlightElementInIframe(element, iframe) {
+  if (!highlightedElement) {
+    highlightedElement = createHighlightOverlay();
+  }
+
+  const elemRect = element.getBoundingClientRect();
+  const iframeRect = iframe.getBoundingClientRect();
+  const scale = getIframeScale(iframe);
+
+  const style = window.getComputedStyle(iframe);
+  const borderLeft = parseFloat(style.borderLeftWidth) || 0;
+  const borderTop = parseFloat(style.borderTopWidth) || 0;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+  // elemRect is in the iframe's internal (layout) space.
+  // Scale border/padding/element offsets to the parent's visual space.
+  highlightedElement.style.top =
+    (iframeRect.top + (borderTop + paddingTop + elemRect.top) * scale.y + scrollTop) + "px";
+  highlightedElement.style.left =
+    (iframeRect.left + (borderLeft + paddingLeft + elemRect.left) * scale.x + scrollLeft) + "px";
+  highlightedElement.style.width = (elemRect.width * scale.x) + "px";
+  highlightedElement.style.height = (elemRect.height * scale.y) + "px";
+  highlightedElement.style.display = "block";
+}
+
+function handleIframeMouseMove(event, iframe) {
+  if (!isExtensionValid || !checkExtensionContext()) {
+    cleanup();
+    return;
+  }
+  if (!isPanelOpen || !hoverEnabled || isLocked) return;
+
+  const coords = getIframeRelativeCoords(event, iframe);
+  const iframeDoc = iframe.contentDocument;
+  if (!iframeDoc) return;
+
+  const rawElement = iframeDoc.elementFromPoint(coords.x, coords.y);
+  if (!rawElement) return;
+
+  const element = resolveSmartTarget(rawElement);
+
+  if (element === lastElement) return;
+
+  // Skip the iframe's html/body — not useful targets
+  if (element === iframeDoc.documentElement || element === iframeDoc.body) return;
+
+  lastElement = element;
+
+  if (throttleTimeout) {
+    clearTimeout(throttleTimeout);
+  }
+
+  highlightElementInIframe(element, iframe);
+  updateHighlightStyle(false);
+
+  throttleTimeout = setTimeout(() => {
+    if (!element.isConnected) return;
+
+    const payload = gatherSelectionData(element, iframe);
+    if (!payload || !payload.xpaths || payload.xpaths.length === 0) return;
+
+    const message = { type: "XPATH_FOUND", ...payload };
+    try {
+      chrome.runtime.sendMessage(message, () => { void chrome.runtime.lastError; });
+    } catch (error) {
+      // Extension context may have been invalidated
+    }
+  }, 50);
+}
+
+function handleIframeClick(event, iframe) {
+  if (!isExtensionValid || !checkExtensionContext()) {
+    cleanup();
+    return;
+  }
+  if (!isPanelOpen || !hoverEnabled) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const coords = getIframeRelativeCoords(event, iframe);
+  const iframeDoc = iframe.contentDocument;
+  if (!iframeDoc) return;
+
+  const rawElement = iframeDoc.elementFromPoint(coords.x, coords.y);
+  if (!rawElement) return;
+
+  const element = resolveSmartTarget(rawElement);
+
+  if (element === iframeDoc.documentElement || element === iframeDoc.body) return;
+
+  lockElementInIframe(element, iframe);
+}
+
+function handleIframeMouseLeave(event, iframe) {
+  if (isLocked) return;
+
+  removeHighlight();
+  lastElement = null;
+
+  if (throttleTimeout) {
+    clearTimeout(throttleTimeout);
+    throttleTimeout = null;
+  }
+
+  try {
+    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {
+    // Extension context may have been invalidated
+  }
+}
+
+function lockElementInIframe(element, iframe) {
+  if (isLocked) return;
+
+  isLocked = true;
+  lockedElement = element;
+  lockedIframeEl = iframe;
+  hoverEnabled = false;
+
+  highlightElementInIframe(lockedElement, iframe);
+  updateHighlightStyle(true);
+
+  const payload = gatherSelectionData(lockedElement, iframe);
+  if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
+    isLocked = false;
+    lockedElement = null;
+    lockedIframeEl = null;
+    hoverEnabled = hoverPreference;
+    return;
+  }
+
+  const message = { type: "XPATH_LOCKED", ...payload };
+  try {
+    chrome.runtime.sendMessage(message, () => { void chrome.runtime.lastError; });
+  } catch (error) {
+    // Extension context may have been invalidated
+  }
+
+  try {
+    chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: true });
+  } catch (error) {
+    // Lock sync failed
+  }
+}
+
+function startIframeObserver() {
+  if (iframeMutationObserver) return;
+
+  iframeMutationObserver = new MutationObserver((mutations) => {
+    let iframeChanged = false;
+    for (const mutation of mutations) {
+      if (mutation.type === "childList") {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeName === "IFRAME" || (node.querySelector && node.querySelector("iframe"))) {
+            iframeChanged = true;
+            break;
+          }
+        }
+        if (!iframeChanged) {
+          for (const node of mutation.removedNodes) {
+            if (node.nodeName === "IFRAME" || (node.querySelector && node.querySelector("iframe"))) {
+              iframeChanged = true;
+              break;
+            }
+          }
+        }
+      }
+      if (iframeChanged) break;
+    }
+
+    if (iframeChanged) {
+      createIframeOverlays();
+    }
+  });
+
+  iframeMutationObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
+}
+
+function stopIframeObserver() {
+  if (iframeMutationObserver) {
+    iframeMutationObserver.disconnect();
+    iframeMutationObserver = null;
+  }
+}
+
 // Throttled mouseover handler
 function handleMouseOver(event) {
   if (!isExtensionValid || !checkExtensionContext()) {
@@ -1176,7 +1399,11 @@ function handleMouseOver(event) {
 
   const element = resolveSmartTarget(rawElement);
 
-  if (element === lastElement || element.id === "pathfinder-x-highlight") {
+  if (
+    element === lastElement ||
+    element.id === "pathfinder-x-highlight" ||
+    element.classList?.contains("pathfinder-x-iframe-overlay")
+  ) {
     return;
   }
 
@@ -1274,7 +1501,8 @@ function handleClick(event) {
     element.tagName === "HTML" ||
     element.tagName === "BODY" ||
     element === document.documentElement ||
-    element.id === "pathfinder-x-highlight"
+    element.id === "pathfinder-x-highlight" ||
+    element.classList?.contains("pathfinder-x-iframe-overlay")
   ) {
     return;
   }
@@ -1348,6 +1576,7 @@ function handleKeyDown(event) {
 function unlockElement() {
   isLocked = false;
   lockedElement = null;
+  lockedIframeEl = null;
   lastElement = null;
   removeHighlight();
 
@@ -1382,7 +1611,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // Re-generate selectors for locked element with new engine
     if (isLocked && lockedElement && lockedElement.isConnected) {
-      const payload = gatherSelectionData(lockedElement);
+      const payload = gatherSelectionData(lockedElement, lockedIframeEl);
       const msg = { type: "XPATH_LOCKED", ...payload };
       try {
         chrome.runtime.sendMessage(msg, () => { void chrome.runtime.lastError; });

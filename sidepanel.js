@@ -304,6 +304,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function batchValidate(entries, context) {
     if (entries.length === 0) return;
 
+    // Peek-through elements are validated at capture time via filterUniqueOptions.
+    // Re-validation via executeScript would target the wrong frame.
+    if (context?.frame?.peekThrough) {
+      entries.forEach((e) =>
+        applyValidationResult(e.validation, { status: "unique" })
+      );
+      return;
+    }
+
     const shadowEntries = [];
     const standardEntries = [];
 
