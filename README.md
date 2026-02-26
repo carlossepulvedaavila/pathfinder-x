@@ -8,19 +8,31 @@ Pathfinder-X is a simple and powerful Chrome extension that helps you find the b
 
 ## ✨ Features
 
-- **Instant XPath Generation:** Just hover over any element to get its XPath.
-- **Optimized for Automation:** Generates XPaths that are optimized for tools like Playwright and Selenium.
-- **Multiple XPath Options:** Provides a variety of XPath options to choose from, including optimized, structural, and by attribute.
-- **Lock and Unlock:** Lock onto an element to prevent it from being lost while you move your cursor.
-- **Modern and Friendly UI:** A clean and intuitive interface that is easy to use.
+- **Instant XPath Generation:** Hover over any element to see its XPath in real time.
+- **Optimized for Automation:** Generates XPaths optimized for Playwright and Selenium.
+- **Multiple XPath Options:** Choose from optimized, structural, and attribute-based selectors.
+- **Lock and Unlock:** Lock onto an element with a click or **Space** to keep it selected while you work. Press **Space** again to unlock.
+- **Side Panel UI:** Runs in Chrome's side panel so it stays open alongside the page.
+- **iFrame & Shadow DOM Support:** Inspects elements inside iframes and shadow roots.
 
 ## 🚀 How to Use
 
-1.  **Install the extension:** Download the extension from the Chrome Web Store (link coming soon).
-2.  **Open the extension:** Click on the Pathfinder-X icon in your Chrome toolbar.
-3.  **Hover over elements:** Move your cursor over any element on the page to see its XPath.
-4.  **Lock an element:** Click on an element or press the **Shift** key to lock it.
-5.  **Copy the XPath:** Click the "Copy" button to copy the XPath to your clipboard.
+1.  **Install the extension:** Download from the Chrome Web Store (link coming soon).
+2.  **Open the extension:** Click the Pathfinder-X icon in your toolbar to open the side panel.
+3.  **Enable inspection:** Toggle "Inspect" on in the side panel header.
+4.  **Hover over elements:** Move your cursor over any element on the page.
+5.  **Lock an element:** Click on an element or press **Space** to lock it. Press **Space** again to unlock.
+6.  **Copy the XPath:** Click the "Copy" button to copy any selector to your clipboard.
+
+## ⌨️ Keyboard Shortcuts
+
+| Action | Windows/Linux | Mac |
+|---|---|---|
+| Open/close side panel | `Ctrl+Shift+X` | `⌘+Shift+X` |
+| Toggle element inspection | `Alt+Shift+X` | `⌥+Shift+X` |
+| Lock/unlock element | `Space` | `Space` |
+
+Shortcuts can be customized at `chrome://extensions/shortcuts`.
 
 ## 🛠️ Development
 

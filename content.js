@@ -1,3 +1,10 @@
+// Prevent double-initialization when injected both by manifest and scripting API
+if (window.__pathfinderXLoaded) {
+  // Already running — just re-register the message listener is not needed
+  // since the first instance is still active
+} else {
+window.__pathfinderXLoaded = true;
+
 // Check if extension context is valid
 function checkExtensionContext() {
   try {
@@ -10,26 +17,35 @@ function checkExtensionContext() {
 
 // Initialize content script only if extension context is valid
 function initializeContentScript() {
-  // Check if extension context is valid on load
   if (!checkExtensionContext()) {
-    console.log(
-      "Pathfinder-X: Extension context invalid, not initializing content script"
-    );
     return false;
   }
-
-  console.log("Pathfinder-X: Content script initialized");
   return true;
 }
 
-// Optimized XPath generation for Playwright and Selenium
-function getOptimizedXPath(element) {
+// XPath string escaping to prevent injection from element attributes
+function escapeXPathString(str) {
+  if (!str) return '""';
+  if (!str.includes('"')) return `"${str}"`;
+  if (!str.includes("'")) return `'${str}'`;
+  // String contains both quote types — build a flat concat() expression
+  const segments = [];
+  const parts = str.split('"');
+  parts.forEach((part, i) => {
+    if (i > 0) segments.push("'\"'");
+    if (part) segments.push(`"${part}"`);
+  });
+  return `concat(${segments.join(",")})`;
+}
+
+// V1 XPath generation (original cascade)
+function getOptimizedXPathV1(element) {
   // Priority 1: Use ID if available and unique
   if (
     element.id &&
     document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1
   ) {
-    return `//*[@id="${element.id}"]`;
+    return `//*[@id=${escapeXPathString(element.id)}]`;
   }
 
   // Priority 2: Use data-testid or similar test attributes
@@ -37,7 +53,7 @@ function getOptimizedXPath(element) {
   for (const attr of testAttributes) {
     const value = element.getAttribute(attr);
     if (value) {
-      return `//*[@${attr}="${value}"]`;
+      return `//*[@${attr}=${escapeXPathString(value)}]`;
     }
   }
 
@@ -45,18 +61,17 @@ function getOptimizedXPath(element) {
   if (element.className && typeof element.className === "string") {
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
 
-    // Try single meaningful classes first
     const meaningfulClasses = classes.filter(
       (cls) =>
         cls.length > 2 &&
         !cls.match(
           /^(d-|flex-|text-|bg-|border-|p-|m-|col-|row-|btn-secondary|btn-primary)/
         ) &&
-        !cls.match(/^[a-z]{1,2}$/) // Skip very short classes like "d", "p", "m"
+        !cls.match(/^[a-z]{1,2}$/)
     );
 
     for (const cls of meaningfulClasses) {
-      const xpath = `//*[@class="${cls}"]`;
+      const xpath = `//*[@class=${escapeXPathString(cls)}]`;
       if (
         document.evaluate(
           xpath,
@@ -70,10 +85,8 @@ function getOptimizedXPath(element) {
       }
     }
 
-    // Try with contains for single meaningful class
     for (const cls of meaningfulClasses.slice(0, 3)) {
-      // Only try first 3 meaningful classes
-      const xpath = `//${element.tagName.toLowerCase()}[contains(@class,"${cls}")]`;
+      const xpath = `//${element.tagName.toLowerCase()}[contains(@class,${escapeXPathString(cls)})]`;
       if (
         document.evaluate(
           xpath,
@@ -101,7 +114,7 @@ function getOptimizedXPath(element) {
   for (const attr of uniqueAttrs) {
     const value = element.getAttribute(attr);
     if (value) {
-      const xpath = `//${element.tagName.toLowerCase()}[@${attr}="${value}"]`;
+      const xpath = `//${element.tagName.toLowerCase()}[@${attr}=${escapeXPathString(value)}]`;
       if (
         document.evaluate(
           xpath,
@@ -116,14 +129,14 @@ function getOptimizedXPath(element) {
     }
   }
 
-  // Priority 5: Use text content for clickable elements (with tag specificity)
+  // Priority 5: Use text content for clickable elements
   if (
     ["A", "BUTTON", "SPAN", "LABEL"].includes(element.tagName) &&
     element.textContent
   ) {
     const text = element.textContent.trim();
     if (text && text.length < 30 && text.length > 2) {
-      const xpath = `//${element.tagName.toLowerCase()}[normalize-space(text())="${text}"]`;
+      const xpath = `//${element.tagName.toLowerCase()}[normalize-space(text())=${escapeXPathString(text)}]`;
       if (
         document.evaluate(
           xpath,
@@ -138,7 +151,7 @@ function getOptimizedXPath(element) {
     }
   }
 
-  // Priority 6: Combination attributes (more specific)
+  // Priority 6: Combination attributes
   if (element.className && element.getAttribute("type")) {
     const type = element.getAttribute("type");
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
@@ -147,7 +160,7 @@ function getOptimizedXPath(element) {
     );
 
     if (meaningfulClass) {
-      const xpath = `//${element.tagName.toLowerCase()}[@type="${type}" and contains(@class,"${meaningfulClass}")]`;
+      const xpath = `//${element.tagName.toLowerCase()}[@type=${escapeXPathString(type)} and contains(@class,${escapeXPathString(meaningfulClass)})]`;
       if (
         document.evaluate(
           xpath,
@@ -162,7 +175,7 @@ function getOptimizedXPath(element) {
     }
   }
 
-  // Fallback: Generate structural path with optimizations
+  // Fallback: Generate structural path
   return getStructuralXPath(element);
 }
 
@@ -194,20 +207,41 @@ function getStructuralXPath(element) {
   return `${parentPath}/${element.tagName.toLowerCase()}${position}`;
 }
 
-// Generate multiple XPath options for better reliability
-function generateXPathOptions(element) {
-  console.log("generateXPathOptions: Starting for element:", element);
+function isUniqueSelector(option) {
+  try {
+    if (option.strategy === "shadow") return true;
+    if (option.strategy === "css") {
+      return document.querySelectorAll(option.xpath).length === 1;
+    }
+    return isUniqueXPath(option.xpath);
+  } catch (e) {
+    return false;
+  }
+}
+
+function filterUniqueOptions(options) {
+  const unique = options.filter(isUniqueSelector);
+  // Always return at least the structural/first option so the card isn't empty
+  return unique.length > 0 ? unique : options.slice(0, 1);
+}
+
+// Generate multiple XPath options
+function generateXPathOptions(element, engine) {
+  const activeEngine = engine || xpathEngine;
+  const getOptimized = activeEngine === "v1"
+    ? getOptimizedXPathV1
+    : getOptimizedXPathV2;
+  const getAlternatives = activeEngine === "v1"
+    ? generateAlternativeXPathsV1
+    : generateAlternativeXPathsV2;
+
   const options = [];
 
   try {
-    // Add the optimized XPath
-    const optimized = getOptimizedXPath(element);
-    console.log("generateXPathOptions: Optimized XPath:", optimized);
+    const optimized = getOptimized(element);
     options.push({ type: "Optimized", xpath: optimized, strategy: "xpath" });
 
-    // Add alternative short XPaths
-    const alternatives = generateAlternativeXPaths(element);
-    console.log("generateXPathOptions: Alternatives:", alternatives);
+    const alternatives = getAlternatives(element);
     alternatives.forEach((alt) => {
       if (
         alt.xpath !== optimized &&
@@ -217,9 +251,7 @@ function generateXPathOptions(element) {
       }
     });
 
-    // Add structural XPath as fallback (only if it's not too long)
     const structural = getStructuralXPath(element);
-    console.log("generateXPathOptions: Structural XPath:", structural);
     if (structural !== optimized && structural.split("/").length < 8) {
       options.push({
         type: "Structural",
@@ -228,10 +260,8 @@ function generateXPathOptions(element) {
       });
     }
 
-    // Add CSS selector equivalent if useful
     try {
       const cssSelector = getCSSSelector(element);
-      console.log("generateXPathOptions: CSS Selector:", cssSelector);
       if (cssSelector && cssSelector.length < 100) {
         options.push({
           type: "CSS Selector",
@@ -240,10 +270,9 @@ function generateXPathOptions(element) {
         });
       }
     } catch (e) {
-      console.log("generateXPathOptions: CSS selector generation failed:", e);
+      // CSS selector generation failed
     }
 
-    console.log("generateXPathOptions: Final options:", options);
     const shadowLocator = buildShadowLocator(element);
     if (
       shadowLocator &&
@@ -256,29 +285,33 @@ function generateXPathOptions(element) {
       });
     }
 
-    if (options.length > 5) {
-      const shadowOption = options.find((opt) => opt.strategy === "shadow");
+    const filtered = filterUniqueOptions(options);
+
+    if (filtered.length > 5) {
+      const shadowOption = filtered.find((opt) => opt.strategy === "shadow");
       if (shadowOption) {
-        const trimmed = options
+        const trimmed = filtered
           .filter((opt) => opt.strategy !== "shadow")
           .slice(0, 4);
         trimmed.push(shadowOption);
         return trimmed;
       }
-      return options.slice(0, 5);
+      return filtered.slice(0, 5);
     }
 
-    return options;
+    return filtered;
   } catch (error) {
-    console.error("generateXPathOptions: Error generating XPaths:", error);
-    // Return at least one option as fallback
     return [
-      { type: "Basic", xpath: getStructuralXPath(element), strategy: "xpath" },
+      {
+        type: "Basic",
+        xpath: getStructuralXPath(element),
+        strategy: "xpath",
+      },
     ];
   }
 }
 
-function generateAlternativeXPaths(element) {
+function generateAlternativeXPathsV1(element) {
   const alternatives = [];
 
   // Alternative 1: Tag + any meaningful attribute
@@ -294,39 +327,42 @@ function generateAlternativeXPaths(element) {
     if (value && value.length < 50) {
       alternatives.push({
         type: `By ${attr}`,
-        xpath: `//${element.tagName.toLowerCase()}[@${attr}="${value}"]`,
+        xpath: `//${element.tagName.toLowerCase()}[@${attr}=${escapeXPathString(value)}]`,
         strategy: "xpath",
       });
-      break; // Only add one attribute-based alternative
+      break;
     }
   }
 
   // Alternative 2: Tag + partial class match
-  if (element.className) {
+  if (element.className && typeof element.className === "string") {
     const classes = element.className.trim().split(/\s+/).filter(Boolean);
     const meaningfulClass = classes.find(
       (cls) =>
-        cls.length > 3 && !cls.match(/^(d-|flex|text-|bg-|border-|p-|m-|col-)/)
+        cls.length > 3 &&
+        !cls.match(/^(d-|flex|text-|bg-|border-|p-|m-|col-)/)
     );
 
     if (meaningfulClass) {
       alternatives.push({
         type: "By class",
-        xpath: `//${element.tagName.toLowerCase()}[contains(@class,"${meaningfulClass}")]`,
+        xpath: `//${element.tagName.toLowerCase()}[contains(@class,${escapeXPathString(meaningfulClass)})]`,
         strategy: "xpath",
       });
     }
   }
 
-  // Alternative 3: Text content (for buttons, links, etc.)
+  // Alternative 3: Text content
   if (
-    ["BUTTON", "A", "SPAN", "LABEL", "H1", "H2", "H3"].includes(element.tagName)
+    ["BUTTON", "A", "SPAN", "LABEL", "H1", "H2", "H3"].includes(
+      element.tagName
+    )
   ) {
     const text = element.textContent?.trim();
     if (text && text.length > 2 && text.length < 30) {
       alternatives.push({
         type: "By text",
-        xpath: `//${element.tagName.toLowerCase()}[contains(text(),"${text}")]`,
+        xpath: `//${element.tagName.toLowerCase()}[contains(text(),${escapeXPathString(text)})]`,
         strategy: "xpath",
       });
     }
@@ -339,10 +375,373 @@ function generateAlternativeXPaths(element) {
     );
     const position = Array.from(similarElements).indexOf(element) + 1;
     if (position > 0 && position <= 5) {
-      // Only if it's among the first 5
       alternatives.push({
         type: "By position",
         xpath: `(//${element.tagName.toLowerCase()})[${position}]`,
+        strategy: "xpath",
+      });
+    }
+  }
+
+  return alternatives;
+}
+
+// --- V2 Engine: Shared helpers ---
+
+function isUniqueXPath(xpath) {
+  try {
+    return document.evaluate(
+      xpath, document, null,
+      XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+    ).snapshotLength === 1;
+  } catch (e) {
+    return false;
+  }
+}
+
+const DYNAMIC_ID_PATTERNS = [
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  /^[0-9a-f]{16,}$/i,
+  /^:r[0-9a-z]+:$/,
+  /^(ember|react-select-|__next-|radix-)\d/,
+  /^[a-zA-Z_-]*[0-9]{5,}$/,
+  /^[a-z]{1,3}-[0-9a-f]{6,}$/i,
+  /^[a-z]+_[A-Za-z0-9+/=]{8,}$/,
+];
+
+function isStableId(id) {
+  if (!id || id.length < 2) return false;
+  return !DYNAMIC_ID_PATTERNS.some(pattern => pattern.test(id));
+}
+
+const TEST_ATTRIBUTES_V2 = [
+  "data-testid", "data-test", "data-cy", "data-qa", "data-automation"
+];
+const TEST_ATTR_SET = new Set(TEST_ATTRIBUTES_V2);
+
+const IGNORE_DATA_PATTERNS = [
+  /^data-reactid$/,
+  /^data-react/,
+  /^data-v-/,
+  /^data-emotion/,
+  /^data-styled/,
+  /^data-radix/,
+  /^data-headlessui/,
+  /^data-rbd/,
+];
+
+function isSemanticDataAttr(attrName) {
+  if (!attrName.startsWith("data-")) return false;
+  if (TEST_ATTR_SET.has(attrName)) return false;
+  return !IGNORE_DATA_PATTERNS.some(p => p.test(attrName));
+}
+
+function getMeaningfulClasses(element) {
+  if (!element.className || typeof element.className !== "string") return [];
+  return element.className.trim().split(/\s+/).filter(cls =>
+    cls.length > 2 &&
+    !cls.match(/^(d-|flex-|text-|bg-|border-|p-|m-|col-|row-|w-|h-|gap-|grid-|justify-|items-|self-|btn-secondary|btn-primary)/) &&
+    !cls.match(/^[a-z]{1,2}$/) &&
+    !cls.match(/^[a-f0-9]{6,}$/i)
+  );
+}
+
+function findStableAnchor(element) {
+  let current = element.parentElement;
+  let depth = 0;
+  const MAX_DEPTH = 6;
+
+  while (current && current !== document.body && depth < MAX_DEPTH) {
+    depth++;
+
+    if (current.id && isStableId(current.id)) {
+      const escaped = CSS.escape(current.id);
+      if (document.querySelectorAll(`#${escaped}`).length === 1) {
+        return { element: current, xpath: `//*[@id=${escapeXPathString(current.id)}]`, depth };
+      }
+    }
+
+    for (const attr of TEST_ATTRIBUTES_V2) {
+      const val = current.getAttribute(attr);
+      if (val) {
+        const anchorXpath = `//*[@${attr}=${escapeXPathString(val)}]`;
+        if (isUniqueXPath(anchorXpath)) {
+          return { element: current, xpath: anchorXpath, depth };
+        }
+      }
+    }
+
+    const role = current.getAttribute("role");
+    if (role) {
+      const anchorXpath = `//*[@role=${escapeXPathString(role)}]`;
+      if (isUniqueXPath(anchorXpath)) {
+        return { element: current, xpath: anchorXpath, depth };
+      }
+    }
+
+    const name = current.getAttribute("name");
+    if (name) {
+      const anchorXpath = `//${current.tagName.toLowerCase()}[@name=${escapeXPathString(name)}]`;
+      if (isUniqueXPath(anchorXpath)) {
+        return { element: current, xpath: anchorXpath, depth };
+      }
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function buildRelativePath(fromAncestor, toElement) {
+  const path = [];
+  let current = toElement;
+
+  while (current && current !== fromAncestor) {
+    const parent = current.parentElement;
+    if (!parent) break;
+
+    const siblings = Array.from(parent.children).filter(
+      child => child.tagName === current.tagName
+    );
+    let step = current.tagName.toLowerCase();
+    if (siblings.length > 1) {
+      const index = siblings.indexOf(current) + 1;
+      step += `[${index}]`;
+    }
+    path.unshift(step);
+    current = parent;
+  }
+
+  return path.join("/");
+}
+
+// --- V2 Engine: Optimized XPath with new cascade ---
+
+function getOptimizedXPathV2(element) {
+  const tag = element.tagName.toLowerCase();
+
+  // Priority 1: Stable ID
+  if (element.id) {
+    const escaped = CSS.escape(element.id);
+    if (
+      isStableId(element.id) &&
+      document.querySelectorAll(`#${escaped}`).length === 1
+    ) {
+      return `//*[@id=${escapeXPathString(element.id)}]`;
+    }
+  }
+
+  // Priority 2: Name + type combination (form elements)
+  if (FORM_TAGS.has(element.tagName)) {
+    const name = element.getAttribute("name");
+    const type = element.getAttribute("type");
+
+    if (name && type) {
+      const xpath = `//${tag}[@name=${escapeXPathString(name)} and @type=${escapeXPathString(type)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    if (name) {
+      const xpath = `//${tag}[@name=${escapeXPathString(name)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+  }
+
+  // Priority 3: ARIA role (elevated — spec-driven, never localized)
+  const role = element.getAttribute("role");
+  if (role) {
+    const xpath = `//*[@role=${escapeXPathString(role)}]`;
+    if (isUniqueXPath(xpath)) return xpath;
+
+    const tagXpath = `//${tag}[@role=${escapeXPathString(role)}]`;
+    if (isUniqueXPath(tagXpath)) return tagXpath;
+  }
+
+  // Priority 4: Test attributes (with uniqueness check)
+  for (const attr of TEST_ATTRIBUTES_V2) {
+    const value = element.getAttribute(attr);
+    if (value) {
+      const xpath = `//*[@${attr}=${escapeXPathString(value)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+  }
+
+  // Priority 5: Semantic data-* attributes
+  const dataAttrs = Array.from(element.attributes)
+    .filter(a => isSemanticDataAttr(a.name) && a.value && a.value.length < 80)
+    .sort((a, b) => a.value.length - b.value.length);
+
+  for (const attr of dataAttrs) {
+    const xpath = `//*[@${attr.name}=${escapeXPathString(attr.value)}]`;
+    if (isUniqueXPath(xpath)) return xpath;
+  }
+
+  // Priority 6: Multi-condition attribute triangulation
+  const STABLE_ATTRS = [
+    "name", "type", "role", "aria-label",
+    "placeholder", "title", "alt", "href", "for"
+  ];
+
+  const presentAttrs = STABLE_ATTRS
+    .map(attr => ({ name: attr, value: element.getAttribute(attr) }))
+    .filter(a => a.value && a.value.length < 60);
+
+  dataAttrs.forEach(a => {
+    if (presentAttrs.length < 8) {
+      presentAttrs.push({ name: a.name, value: a.value });
+    }
+  });
+
+  // Try pairs
+  if (presentAttrs.length >= 2) {
+    for (let i = 0; i < presentAttrs.length - 1; i++) {
+      for (let j = i + 1; j < presentAttrs.length; j++) {
+        const a = presentAttrs[i];
+        const b = presentAttrs[j];
+        const xpath = `//${tag}[@${a.name}=${escapeXPathString(a.value)} and @${b.name}=${escapeXPathString(b.value)}]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+  }
+
+  // Try triples
+  if (presentAttrs.length >= 3) {
+    for (let i = 0; i < presentAttrs.length - 2; i++) {
+      for (let j = i + 1; j < presentAttrs.length - 1; j++) {
+        for (let k = j + 1; k < presentAttrs.length; k++) {
+          const a = presentAttrs[i];
+          const b = presentAttrs[j];
+          const c = presentAttrs[k];
+          const xpath = `//${tag}[@${a.name}=${escapeXPathString(a.value)} and @${b.name}=${escapeXPathString(b.value)} and @${c.name}=${escapeXPathString(c.value)}]`;
+          if (isUniqueXPath(xpath)) return xpath;
+        }
+      }
+    }
+  }
+
+  // Priority 7: Meaningful class + attribute
+  const meaningfulClasses = getMeaningfulClasses(element);
+
+  for (const cls of meaningfulClasses.slice(0, 3)) {
+    for (const attr of presentAttrs.slice(0, 3)) {
+      const xpath = `//${tag}[contains(@class,${escapeXPathString(cls)}) and @${attr.name}=${escapeXPathString(attr.value)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    const xpath = `//${tag}[contains(@class,${escapeXPathString(cls)})]`;
+    if (isUniqueXPath(xpath)) return xpath;
+  }
+
+  // Priority 8: Scoped structural with stable anchor
+  const anchor = findStableAnchor(element);
+  if (anchor) {
+    const relativePath = buildRelativePath(anchor.element, element);
+    if (relativePath) {
+      const xpath = `${anchor.xpath}/${relativePath}`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    const descXpath = `${anchor.xpath}//${tag}`;
+    if (isUniqueXPath(descXpath)) return descXpath;
+  }
+
+  // Priority 9: Complex predicates — text content
+  if (["A", "BUTTON", "SPAN", "LABEL", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "TD", "TH"].includes(element.tagName)) {
+    const text = element.textContent?.trim();
+    if (text && text.length > 2 && text.length < 50) {
+      const xpath = `//${tag}[normalize-space(text())=${escapeXPathString(text)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+
+      const containsXpath = `//${tag}[contains(normalize-space(.),${escapeXPathString(text)})]`;
+      if (isUniqueXPath(containsXpath)) return containsXpath;
+    }
+  }
+
+  // Priority 9b: Label-relative selectors for form inputs
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(element.tagName)) {
+    const prevLabel = element.previousElementSibling;
+    if (prevLabel && prevLabel.tagName === "LABEL" && prevLabel.textContent?.trim()) {
+      const labelText = prevLabel.textContent.trim();
+      if (labelText.length < 40) {
+        const xpath = `//label[normalize-space(.)=${escapeXPathString(labelText)}]/following-sibling::${tag}[1]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+
+    if (element.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+      if (label && label.textContent?.trim()) {
+        const labelText = label.textContent.trim();
+        const xpath = `//label[normalize-space(.)=${escapeXPathString(labelText)}]/following::${tag}[1]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+  }
+
+  // Priority 10: Full structural fallback
+  return getStructuralXPath(element);
+}
+
+// --- V2 Engine: Alternative XPaths ---
+
+function generateAlternativeXPathsV2(element) {
+  const alternatives = [];
+  const tag = element.tagName.toLowerCase();
+
+  // Alt 1: By aria-label
+  const ariaLabel = element.getAttribute("aria-label");
+  if (ariaLabel && ariaLabel.length < 60) {
+    alternatives.push({
+      type: "By aria-label",
+      xpath: `//${tag}[@aria-label=${escapeXPathString(ariaLabel)}]`,
+      strategy: "xpath",
+    });
+  }
+
+  // Alt 2: By semantic data-* attribute
+  const dataAttr = Array.from(element.attributes).find(
+    a => isSemanticDataAttr(a.name) && a.value
+  );
+  if (dataAttr) {
+    alternatives.push({
+      type: `By ${dataAttr.name}`,
+      xpath: `//*[@${dataAttr.name}=${escapeXPathString(dataAttr.value)}]`,
+      strategy: "xpath",
+    });
+  }
+
+  // Alt 3: Scoped path
+  const anchor = findStableAnchor(element);
+  if (anchor) {
+    const relPath = buildRelativePath(anchor.element, element);
+    if (relPath) {
+      alternatives.push({
+        type: "Scoped path",
+        xpath: `${anchor.xpath}/${relPath}`,
+        strategy: "xpath",
+      });
+    }
+  }
+
+  // Alt 4: By text content
+  const text = element.textContent?.trim();
+  if (text && text.length > 2 && text.length < 40) {
+    alternatives.push({
+      type: "By text",
+      xpath: `//${tag}[contains(normalize-space(.),${escapeXPathString(text)})]`,
+      strategy: "xpath",
+    });
+  }
+
+  // Alt 5: By position (interactive elements)
+  if (["INPUT", "BUTTON", "SELECT", "A"].includes(element.tagName)) {
+    const similarElements = document.querySelectorAll(tag);
+    const position = Array.from(similarElements).indexOf(element) + 1;
+    if (position > 0 && position <= 5) {
+      alternatives.push({
+        type: "By position",
+        xpath: `(//${tag})[${position}]`,
         strategy: "xpath",
       });
     }
@@ -389,13 +788,6 @@ function getCSSSelector(element) {
   return path.length > 0 ? path.join(" > ") : null;
 }
 
-function escapeSelector(selector) {
-  if (!selector) {
-    return "";
-  }
-  return selector.replace(/'/g, "\\'");
-}
-
 function buildShadowLocator(element) {
   if (!element) {
     return null;
@@ -437,7 +829,8 @@ function buildShadowLocator(element) {
   let expression = "document";
 
   chain.forEach((step, index) => {
-    const normalized = escapeSelector(step.selector);
+    // Escape for safe embedding inside a JS single-quoted string
+    const normalized = step.selector.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     expression += `.querySelector('${normalized}')`;
     if (index !== chain.length - 1) {
       expression += ".shadowRoot";
@@ -498,12 +891,16 @@ function describeFrameElement(frameEl) {
   }
 
   if (frameEl.name) {
-    return `${frameEl.tagName.toLowerCase()}[name="${frameEl.name}"]`;
+    // Display-only string — use CSS-style quoting, not XPath escaping
+    const nameVal = frameEl.name.includes('"') ? `'${frameEl.name}'` : `"${frameEl.name}"`;
+    return `${frameEl.tagName.toLowerCase()}[name=${nameVal}]`;
   }
 
   const src = frameEl.getAttribute("src");
   if (src) {
-    return `${frameEl.tagName.toLowerCase()}[src="${src}"]`;
+    // Display-only string — use CSS-style quoting, not XPath escaping
+    const srcVal = src.includes('"') ? `'${src}'` : `"${src}"`;
+    return `${frameEl.tagName.toLowerCase()}[src=${srcVal}]`;
   }
 
   const parent = frameEl.parentElement;
@@ -583,20 +980,21 @@ function buildElementInfo(element, context) {
 function buildContext(element) {
   const frame = getFrameMetadata();
   const shadow = buildShadowContext(element);
-
   return { frame, shadow };
 }
 
 function gatherSelectionData(element) {
-  const xpaths = generateXPathOptions(element);
   const context = buildContext(element);
   const elementInfo = buildElementInfo(element, context);
 
-  return {
-    xpaths,
-    context,
-    elementInfo,
-  };
+  if (comparisonMode) {
+    const xpaths = generateXPathOptions(element, "v2");
+    const v1Xpaths = generateXPathOptions(element, "v1");
+    return { xpaths, v1Xpaths, context, elementInfo, comparisonMode: true };
+  }
+
+  const xpaths = generateXPathOptions(element);
+  return { xpaths, context, elementInfo };
 }
 
 function getComposedPathTarget(event) {
@@ -610,20 +1008,68 @@ function getComposedPathTarget(event) {
   return event.target instanceof Element ? event.target : null;
 }
 
-// Visual highlighting and performance optimization
+// Bubble up from generic wrappers (div, span, svg, etc.) to the nearest
+// semantic/interactive parent so selectors target the meaningful element
+// (e.g. <button> instead of its inner <div>).
+const SEMANTIC_TARGETS = new Set([
+  "A", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "LABEL",
+  "SUMMARY", "OPTION", "DETAILS",
+]);
+
+const INTERACTIVE_ROLES = new Set([
+  "button", "link", "menuitem", "tab", "option",
+  "checkbox", "radio", "switch", "combobox",
+]);
+
+const WRAPPER_TAGS = new Set([
+  "DIV", "SPAN", "SVG", "PATH", "G", "IMG", "I",
+  "EM", "STRONG", "B", "P", "SMALL",
+]);
+
+const FORM_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA", "BUTTON"]);
+
+function resolveSmartTarget(element) {
+  if (SEMANTIC_TARGETS.has(element.tagName)) return element;
+
+  const role = element.getAttribute("role");
+  if (role && INTERACTIVE_ROLES.has(role)) return element;
+
+  if (!WRAPPER_TAGS.has(element.tagName)) return element;
+
+  let current = element.parentElement;
+  let depth = 0;
+
+  while (current && current !== document.body && depth < 3) {
+    if (SEMANTIC_TARGETS.has(current.tagName)) return current;
+
+    const parentRole = current.getAttribute("role");
+    if (parentRole && INTERACTIVE_ROLES.has(parentRole)) return current;
+
+    // Stop at non-wrapper elements — don't skip past meaningful containers
+    if (!WRAPPER_TAGS.has(current.tagName)) break;
+
+    current = current.parentElement;
+    depth++;
+  }
+
+  return element;
+}
+
+// State management
 let highlightedElement = null;
 let lastElement = null;
 let throttleTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
-let lockedElement = null; // Track locked element
-let isLocked = false; // Track if element is locked
-let isPopupOpen = false; // Track if popup is open
-let hoverEnabled = false; // Track if hover detection should be active
-let listenersAttached = false; // Track if hover listeners are attached
-let hoverPreference = true; // Track desired hover state from popup toggle
+let lockedElement = null;
+let isLocked = false;
+let isPanelOpen = false;
+let hoverEnabled = false;
+let listenersAttached = false;
+let hoverPreference = true;
+let xpathEngine = "v2";
+let comparisonMode = false;
 
-// Cleanup function to remove event listeners and highlights
 function cleanup() {
   isExtensionValid = false;
   removeHighlight();
@@ -638,10 +1084,7 @@ function cleanup() {
     contextCheckInterval = null;
   }
 
-  // Detach hover listeners if present
   detachHoverListeners();
-
-  console.log("Pathfinder-X content script cleaned up");
 }
 
 function attachHoverListeners() {
@@ -651,7 +1094,6 @@ function attachHoverListeners() {
   document.addEventListener("click", handleClick, { passive: false });
   document.addEventListener("keydown", handleKeyDown, { passive: false });
   listenersAttached = true;
-  console.log("Content script: Hover listeners attached");
 }
 
 function detachHoverListeners() {
@@ -661,8 +1103,8 @@ function detachHoverListeners() {
   document.removeEventListener("click", handleClick);
   document.removeEventListener("keydown", handleKeyDown);
   listenersAttached = false;
-  console.log("Content script: Hover listeners detached");
 }
+
 function createHighlightOverlay() {
   const overlay = document.createElement("div");
   overlay.id = "pathfinder-x-highlight";
@@ -715,138 +1157,119 @@ function removeHighlight() {
   }
 }
 
-// Throttled mouseover handler for performance
+// Throttled mouseover handler
 function handleMouseOver(event) {
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Only process hover events if popup is open, hover is enabled, and not locked
-  if (!isPopupOpen || !hoverEnabled || isLocked) {
+  if (!isPanelOpen || !hoverEnabled || isLocked) {
     return;
   }
 
-  const element = getComposedPathTarget(event);
+  const rawElement = getComposedPathTarget(event);
 
-  if (!element) {
+  if (!rawElement) {
     return;
   }
 
-  // Skip if same element or if it's our highlight overlay
+  const element = resolveSmartTarget(rawElement);
+
   if (element === lastElement || element.id === "pathfinder-x-highlight") {
     return;
   }
 
   lastElement = element;
 
-  // Clear previous timeout
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
   }
 
-  // Throttle XPath generation but highlight immediately
   highlightElement(element);
-  updateHighlightStyle(false); // Ensure it's the default highlight
+  updateHighlightStyle(false);
 
   throttleTimeout = setTimeout(() => {
-    console.log("Content script: Generating XPath for element:", element);
+    // Verify element is still in the DOM
+    if (!element.isConnected) {
+      return;
+    }
+
     const payload = gatherSelectionData(element);
-    console.log("Content script generated payload:", payload);
 
     if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
-      console.error("Content script: No XPath options generated!");
       return;
     }
 
     const message = {
       type: "XPATH_FOUND",
-      xpaths: payload.xpaths,
-      elementInfo: payload.elementInfo,
-      context: payload.context,
+      ...payload,
     };
 
-    console.log("Content script sending message:", message);
-
-    // Send message with error handling
     try {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          console.log(
-            "Content script: Runtime error:",
-            chrome.runtime.lastError
-          );
-          cleanup();
-        }
+      chrome.runtime.sendMessage(message, () => {
+        // Suppress transient errors — context check interval handles real invalidation
+        void chrome.runtime.lastError;
       });
     } catch (error) {
-      console.log("Content script: Exception sending message:", error);
-      cleanup();
+      // Extension context may have been invalidated
     }
-  }, 50); // 50ms throttle
+  }, 50);
 }
 
 function handleMouseOut(event) {
-  // Only clear highlight if not locked
   if (isLocked) return;
 
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Only process mouseout events if popup is open and hover is enabled
-  if (!isPopupOpen || !hoverEnabled) {
+  if (!isPanelOpen || !hoverEnabled) {
     return;
   }
 
-  // Only remove highlight if we're not moving to a child element
-  if (
-    !event.relatedTarget ||
-    !event.currentTarget.contains(event.relatedTarget)
-  ) {
-    removeHighlight();
-    lastElement = null;
+  // Check if the mouse left the current element (not just moved to a child)
+  const relatedTarget = event.relatedTarget;
+  if (relatedTarget && lastElement && lastElement.contains(relatedTarget)) {
+    return;
+  }
 
-    if (throttleTimeout) {
-      clearTimeout(throttleTimeout);
-      throttleTimeout = null;
-    }
+  removeHighlight();
+  lastElement = null;
 
-    // Send message with error handling
-    try {
-      chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, (response) => {
-        if (chrome.runtime.lastError) {
-          cleanup();
-        }
-      });
-    } catch (error) {
-      cleanup();
-    }
+  if (throttleTimeout) {
+    clearTimeout(throttleTimeout);
+    throttleTimeout = null;
+  }
+
+  try {
+    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {
+    // Extension context may have been invalidated
   }
 }
 
 function handleClick(event) {
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Only process click events if popup is open and hover is enabled
-  if (!isPopupOpen || !hoverEnabled) {
+  if (!isPanelOpen || !hoverEnabled) {
     return;
   }
 
-  const element = getComposedPathTarget(event);
+  const rawElement = getComposedPathTarget(event);
 
-  if (!element) {
+  if (!rawElement) {
     return;
   }
 
-  // Skip if clicking on certain elements
+  const element = resolveSmartTarget(rawElement);
+
   if (
     element.tagName === "HTML" ||
     element.tagName === "BODY" ||
@@ -856,128 +1279,135 @@ function handleClick(event) {
     return;
   }
 
-  // Prevent default action and stop propagation to avoid interfering with page
   event.preventDefault();
   event.stopPropagation();
 
-  // Lock the element
   lockElement(element);
 }
 
-// Add a new function to handle locking the element
 function lockElement(element) {
-  if (isLocked) return; // Already locked
+  if (isLocked) return;
 
   isLocked = true;
   lockedElement = element;
   hoverEnabled = false;
 
-  // Highlight the locked element
   highlightElement(lockedElement);
-  updateHighlightStyle(true); // Use locked style
+  updateHighlightStyle(true);
 
   const payload = gatherSelectionData(lockedElement);
-  console.log("Content script: Element locked", lockedElement);
-  console.log("Content script generated payload for locked element:", payload);
 
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
-    console.error(
-      "Content script: No XPath options generated for locked element!"
-    );
+    isLocked = false;
+    lockedElement = null;
+    hoverEnabled = hoverPreference;
     return;
   }
 
   const message = {
     type: "XPATH_LOCKED",
-    xpaths: payload.xpaths,
-    elementInfo: payload.elementInfo,
-    context: payload.context,
+    ...payload,
   };
 
-  console.log("Content script sending locked message:", message);
-
-  // Send locked message to background script
   try {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        console.log("Error sending locked message:", chrome.runtime.lastError);
-        cleanup();
-      }
+    chrome.runtime.sendMessage(message, () => {
+      void chrome.runtime.lastError;
     });
   } catch (error) {
-    console.log("Exception sending locked message:", error);
-    cleanup();
+    // Extension context may have been invalidated
   }
 
   try {
     chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: true });
   } catch (error) {
-    console.log("Content script: Failed to sync lock state", error);
+    // Lock sync failed
   }
 }
 
-// Add a new function to handle keydown events for locking
 function handleKeyDown(event) {
-  // Check if extension is still valid
   if (!isExtensionValid || !checkExtensionContext()) {
     cleanup();
     return;
   }
 
-  // Lock on Shift key press, but only if an element is being hovered
-  if (event.key === "Shift" && lastElement && !isLocked) {
+  if (event.code === "Space" && isPanelOpen) {
+    // Don't intercept Space in form fields or editable elements
+    const tag = event.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable) {
+      return;
+    }
     event.preventDefault();
-    event.stopPropagation();
-    lockElement(lastElement);
+    if (isLocked) {
+      unlockElement();
+    } else if (hoverEnabled && lastElement) {
+      lockElement(lastElement);
+    }
   }
 }
 
-// Function to unlock element
 function unlockElement() {
   isLocked = false;
   lockedElement = null;
+  lastElement = null;
   removeHighlight();
 
-  // Send unlock message to popup
   try {
-    chrome.runtime.sendMessage({ type: "XPATH_UNLOCKED" }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.log("Error sending unlock message:", chrome.runtime.lastError);
-        cleanup();
-      }
+    chrome.runtime.sendMessage({ type: "XPATH_UNLOCKED" }, () => {
+      void chrome.runtime.lastError;
     });
   } catch (error) {
-    console.log("Exception sending unlock message:", error);
-    cleanup();
+    // Extension context may have been invalidated
   }
 
-  // Re-enable hover detection
   hoverEnabled = hoverPreference;
-  console.log("Content script: Element unlocked, hover detection re-enabled");
 
   try {
     chrome.runtime.sendMessage({ type: "LOCK_STATE_SYNC", locked: false });
   } catch (error) {
-    console.log("Content script: Failed to broadcast unlock state", error);
+    // Lock sync failed
   }
 }
 
-// Listen for messages from popup
+// Listen for messages from side panel and background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "UNLOCK_ELEMENT") {
+  if (message.type === "PING") {
+    sendResponse({ success: true });
+    return;
+  }
+
+  if (message.type === "SET_XPATH_ENGINE") {
+    xpathEngine = message.engine || "v2";
+    comparisonMode = !!message.comparisonMode;
+    sendResponse({ success: true });
+
+    // Re-generate selectors for locked element with new engine
+    if (isLocked && lockedElement && lockedElement.isConnected) {
+      const payload = gatherSelectionData(lockedElement);
+      const msg = { type: "XPATH_LOCKED", ...payload };
+      try {
+        chrome.runtime.sendMessage(msg, () => { void chrome.runtime.lastError; });
+      } catch (e) { /* context may be invalid */ }
+    }
+    return;
+  }
+
+  if (message.type === "TOGGLE_LOCK") {
+    if (isLocked) {
+      unlockElement();
+    } else if (hoverEnabled && lastElement) {
+      lockElement(lastElement);
+    }
+    sendResponse({ success: true });
+  } else if (message.type === "UNLOCK_ELEMENT") {
     unlockElement();
     sendResponse({ success: true });
-  } else if (message.type === "POPUP_OPENED") {
-    isPopupOpen = true;
-    // Enable hover by default when popup opens (will be disabled if toggle is off)
+  } else if (message.type === "PANEL_OPENED") {
+    isPanelOpen = true;
     hoverEnabled = hoverPreference && !isLocked;
     attachHoverListeners();
-    console.log(
-      "Content script: Popup opened, listeners attached, hover enabled"
-    );
     sendResponse({ success: true });
-  } else if (message.type === "POPUP_CLOSED") {
-    isPopupOpen = false;
+  } else if (message.type === "PANEL_CLOSED") {
+    isPanelOpen = false;
     hoverEnabled = false;
     if (isLocked) {
       unlockElement();
@@ -985,21 +1415,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     removeHighlight();
     lastElement = null;
     detachHoverListeners();
-    console.log("Content script: Popup closed, hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "ENABLE_HOVER") {
     hoverPreference = true;
     if (!isLocked) {
       hoverEnabled = true;
+      attachHoverListeners();
     }
-    console.log("Content script: Hover detection enabled");
     sendResponse({ success: true });
   } else if (message.type === "DISABLE_HOVER") {
     hoverPreference = false;
     hoverEnabled = false;
+    // If locked, fully release the lock so state doesn't go stale
+    if (isLocked) {
+      unlockElement();
+    }
     removeHighlight();
     lastElement = null;
-    console.log("Content script: Hover detection disabled");
     sendResponse({ success: true });
   } else if (message.type === "LOCK_STATE_SYNC") {
     if (message.locked) {
@@ -1018,10 +1450,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Initialize the extension if context is valid
+// Initialize
 if (initializeContentScript()) {
-  // Do NOT attach hover listeners yet; wait for popup to open
-
   const canUseUnloadHandlers =
     typeof window.fence === "undefined" &&
     !(document && document.fencedframeElement);
@@ -1037,25 +1467,16 @@ if (initializeContentScript()) {
   if (canUseUnloadHandlers) {
     window.addEventListener("beforeunload", handleUnload);
     window.addEventListener("unload", handleUnload);
-  } else {
-    console.log(
-      "Pathfinder-X: Skipping unload handlers due to fenced frame restrictions"
-    );
   }
 
-  console.log(
-    "Pathfinder-X: Base content script setup complete; listeners will attach when popup opens"
-  );
-
-  // Periodic check for extension context (every 5 seconds)
+  // Check extension context lazily — only when interaction is happening
+  // instead of polling every 5 seconds on every page
   contextCheckInterval = setInterval(() => {
+    if (!isPanelOpen) return; // Only check when panel is active
     if (!checkExtensionContext()) {
-      console.log("Pathfinder-X: Extension context lost, cleaning up...");
       cleanup();
     }
-  }, 5000);
-} else {
-  console.log(
-    "Pathfinder-X: Skipping event listener setup due to invalid context"
-  );
+  }, 10000);
 }
+
+} // end double-initialization guard

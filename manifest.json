@@ -1,17 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Pathfinder-X",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Finds the best XPath for any element on a webpage.",
   "permissions": [
     "activeTab",
     "scripting",
     "contextMenus",
     "storage",
-    "webNavigation"
+    "webNavigation",
+    "sidePanel"
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "images/icon_16.png",
       "48": "images/icon_48.png",
@@ -33,5 +33,27 @@
       "all_frames": true
     }
   ],
-  "host_permissions": ["<all_urls>"]
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+X",
+        "mac": "Command+Shift+X"
+      },
+      "description": "Toggle Pathfinder-X inspector"
+    },
+    "toggle-inspect": {
+      "suggested_key": {
+        "default": "Alt+Shift+X",
+        "mac": "Alt+Shift+X"
+      },
+      "description": "Toggle element inspection"
+    }
+  },
+  "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  }
 }

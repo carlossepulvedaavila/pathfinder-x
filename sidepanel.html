@@ -3,12 +3,6 @@
   <head>
     <title>Pathfinder-X</title>
     <link rel="stylesheet" href="styles.css" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@300..900&display=swap"
-      rel="stylesheet"
-    />
   </head>
 
   <body>
@@ -24,12 +18,11 @@
             <h3 class="title__text">PATHFINDER-X</h3>
           </div>
           <div class="toggle-container">
+            <span class="toggle-text">Inspect</span>
             <input type="checkbox" id="toggle" class="toggle-input" />
             <label for="toggle" class="toggle-label"></label>
           </div>
         </div>
-
-        <div class="status" id="status">Ready</div>
       </div>
 
       <div class="modal__content">
@@ -38,6 +31,14 @@
             <span>Element Locked</span>
           </div>
           <button class="unlock-btn" id="unlockButton">Unlock</button>
+        </div>
+
+        <div class="engine-controls" id="engineControls">
+          <div class="engine-toggle" id="engineToggle">
+            <button class="engine-btn active" data-engine="v2">V2</button>
+            <button class="engine-btn" data-engine="compare">Compare</button>
+            <button class="engine-btn" data-engine="v1">V1</button>
+          </div>
         </div>
 
         <div class="element-info" id="elementInfo">
@@ -61,17 +62,17 @@
 
             <p>
               <strong>Hover over any element on the webpage</strong><br />
-              to generate XPath selectors optimized for Playwright and Selenium.
+              Click or press Space to lock and generate XPath selectors.
             </p>
           </div>
         </div>
 
         <button class="clear-all" id="clearButton" style="display: none">
-          CLEAR ALL
+          CLEAR
         </button>
       </div>
     </main>
 
-    <script src="popup.js"></script>
+    <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -1,9 +1,60 @@
 // Background service worker for Pathfinder-X
-// Handles communication between content script and popup
+// Handles communication between content script and side panel
 
-// Handle messages from content script and forward to popup
+// Open side panel automatically when extension icon is clicked
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+// Keyboard shortcut to toggle inspection mode
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "toggle-inspect") {
+    chrome.runtime.sendMessage({ type: "TOGGLE_INSPECT" }).catch(() => {
+      // Panel not open — ignore
+    });
+  }
+});
+
+// Detect side panel close via port disconnect and clean up content script state
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "sidepanel") return;
+
+  port.onDisconnect.addListener(() => {
+    const tabIdFromPort = port.sender?.tab?.id;
+
+    function sendPanelClosed(tabId) {
+      chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
+        if (chrome.runtime.lastError || !frames) return;
+
+        frames.forEach((frame) => {
+          chrome.tabs.sendMessage(
+            tabId,
+            { type: "PANEL_CLOSED" },
+            { frameId: frame.frameId },
+            () => void chrome.runtime.lastError
+          );
+        });
+      });
+    }
+
+    if (typeof tabIdFromPort === "number") {
+      sendPanelClosed(tabIdFromPort);
+    } else {
+      // Fallback: best-effort cleanup using active tab if sender.tab is unavailable
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs?.[0];
+        if (!tab?.id) return;
+        sendPanelClosed(tab.id);
+      });
+    }
+  });
+});
+
+// Handle messages from content script and forward to side panel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("Background received message:", message);
+  // Only accept messages from our own extension
+  if (sender.id !== chrome.runtime.id) {
+    sendResponse({ success: false, error: "Unknown sender" });
+    return false;
+  }
 
   if (message.type === "LOCK_STATE_SYNC") {
     const tabId = sender?.tab?.id;
@@ -15,11 +66,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
       if (chrome.runtime.lastError) {
-        console.log(
-          "Background: Failed to enumerate frames for lock sync:",
-          chrome.runtime.lastError
-        );
-        sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        sendResponse({
+          success: false,
+          error: chrome.runtime.lastError.message,
+        });
         return;
       }
 
@@ -29,12 +79,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           { type: "LOCK_STATE_SYNC", locked: message.locked },
           { frameId: frame.frameId },
           () => {
-            if (chrome.runtime.lastError) {
-              console.log(
-                `Background: Failed to sync lock state to frame ${frame.frameId}:`,
-                chrome.runtime.lastError
-              );
-            }
+            // Suppress errors for frames that don't have the content script
+            void chrome.runtime.lastError;
           }
         );
       });
@@ -49,10 +95,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message.type === "XPATH_FOUND" ||
     message.type === "XPATH_CLEAR" ||
     message.type === "XPATH_LOCKED" ||
-    message.type === "XPATH_UNLOCKED" ||
-    message.type === "XPATH_SELECTED"
+    message.type === "XPATH_UNLOCKED"
   ) {
-    console.log("Background: Processing", message.type, "message");
+    const tabId = sender?.tab?.id;
+    if (typeof tabId !== "number") {
+      sendResponse({ success: false, error: "Missing tabId" });
+      return false;
+    }
 
     const enrichedMessage = {
       ...message,
@@ -61,35 +110,82 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         frame: {
           ...(message.context?.frame || {}),
           frameId: sender?.frameId,
-          tabId: sender?.tab?.id,
+          tabId,
           url: message.context?.frame?.url || sender?.url || "",
         },
       },
     };
 
-    // Store the message for when popup opens
-    chrome.storage.local.set({ lastMessage: enrichedMessage }, () => {
-      console.log("Background: Stored message in local storage");
+    const storageKey = `tabState_${tabId}`;
+
+    // Only persist states that should survive tab switches
+    if (message.type === "XPATH_FOUND" || message.type === "XPATH_LOCKED") {
+      chrome.storage.local.set({ [storageKey]: enrichedMessage }, () => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false });
+          return;
+        }
+        sendResponse({ success: true });
+      });
+    } else {
+      // XPATH_CLEAR / XPATH_UNLOCKED — remove stale stored state
+      chrome.storage.local.remove(storageKey, () => {
+        void chrome.runtime.lastError;
+        sendResponse({ success: true });
+      });
+    }
+
+    // Forward to side panel if it's open
+    try {
+      chrome.runtime.sendMessage(enrichedMessage).catch(() => {
+        // Side panel might not be open
+      });
+    } catch (error) {
+      // Side panel not available
+    }
+
+    return true; // Keep channel open for async storage callback
+  }
+
+  if (message.type === "SET_XPATH_ENGINE") {
+    const tabId = message.tabId;
+    if (typeof tabId !== "number") {
+      sendResponse({ success: false, error: "Missing tabId" });
+      return false;
+    }
+
+    chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
+      if (chrome.runtime.lastError || !frames) {
+        sendResponse({ success: false });
+        return;
+      }
+      frames.forEach((frame) => {
+        chrome.tabs.sendMessage(
+          tabId,
+          {
+            type: "SET_XPATH_ENGINE",
+            engine: message.engine,
+            comparisonMode: message.comparisonMode,
+          },
+          { frameId: frame.frameId },
+          () => { void chrome.runtime.lastError; }
+        );
+      });
       sendResponse({ success: true });
     });
 
-    // Try to send message to popup if it's open
-    try {
-      chrome.runtime
-        .sendMessage(enrichedMessage)
-        .catch(() => {
-          // Popup might not be open, which is fine
-          console.log("Background: Popup not open, message stored for later");
-        });
-    } catch (error) {
-      console.log("Background: Error sending to popup:", error);
-    }
+    return true;
   }
 
-  return true; // Keep message channel open for async response
+  return false;
 });
 
-// Optional: Add context menu item for easier access
+// Clean up tab state when tabs are closed (runs even when panel is closed)
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.local.remove(`tabState_${tabId}`);
+});
+
+// Context menu item for easier access
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "pathfinder-xpath",
@@ -100,6 +196,6 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "pathfinder-xpath") {
-    chrome.action.openPopup();
+    chrome.sidePanel.open({ tabId: tab.id });
   }
 });

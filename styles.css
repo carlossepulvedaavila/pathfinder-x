@@ -1,11 +1,17 @@
 body {
-  width: 400px;
-  max-height: 1000px;
-  font-family: "Red Hat Display", sans-serif;
+  width: 100%;
+  min-width: 280px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   margin: 0;
-  padding: 6px;
+  padding: 0;
   overflow-y: auto;
-  border-radius: 17px;
+}
+
+.modal__background {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 .header {
@@ -15,13 +21,14 @@ body {
   background-color: #301e88;
   color: white;
   padding: 10px 7px 10px 12px;
-  border-radius: 17px 17px 0px 0px;
-  box-shadow: 5px 5px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .header__top {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 
 .title__container {
@@ -43,60 +50,81 @@ body {
   letter-spacing: 3.5px;
 }
 
-.status {
-  font-size: 12px;
-  color: #787878;
-  background: #bababa;
-  padding: 4px 8px;
-  border-radius: 12px;
-
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 4px 6px;
-}
-
-.status::before {
-  content: "";
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-
-  /* Default Icon (Gray) */
-  background-image: url("./images/hover-icon_disabled.png");
-}
-
-/* Icon for ACTIVE state (Hovering Enabled) - Green */
-.status.active::before {
-  background-image: url("./images/hover-icon_active.png");
-}
-
-.status.active {
-  background: #e8f5e8;
-  color: #2d5a2d;
-}
-
-.status.active.selected {
-  background: #d4edda;
-  color: #155724;
-  border: 1px solid #c3e6cb;
-}
-
-.status.active.locked {
-  background: #fff3cd;
-  color: #856404;
-  border: 1px solid #ffeaa7;
-}
-
-.status.active.locked::before {
-   background-image: url("./images/icon-locked-s.png");
+.toggle-text {
+  font-size: 11px;
+  color: #c4b8f0;
+  letter-spacing: 1px;
+  font-weight: 500;
 }
 
 .modal__content {
   background-color: #f4f4f6;
+  flex: 1;
+  padding-bottom: 8px;
+}
+
+.engine-controls {
+  margin: 6px;
+  display: flex;
+  justify-content: center;
+}
+
+.engine-toggle {
+  display: inline-flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #d0d0d0;
+  background: #e8e8e8;
+}
+
+.engine-btn {
+  background: transparent;
+  border: none;
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.2s;
+}
+
+.engine-btn.active {
+  background: #301e88;
+  color: white;
+}
+
+.engine-btn:hover:not(.active) {
+  background: #d0cce8;
+  color: #301e88;
+}
+
+.engine-divider {
+  display: flex;
+  align-items: center;
+  margin: 8px 12px 4px;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #999;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.engine-divider::before,
+.engine-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #d0d0d0;
+}
+
+.xpath-option.v1-card {
+  opacity: 0.75;
+}
+
+.xpath-option.v1-card .xpath-header {
+  background-color: #555;
 }
 
 .element-info {
@@ -124,16 +152,14 @@ body {
 }
 
 .xpath-option {
-  background: white;
   background-color: #301e88;
   border: 1px solid #ddd;
   border-radius: 12px;
-  margin-bottom: 2px;
+  margin: 0 6px 2px;
   overflow: hidden;
 }
 
 .xpath-header {
-  background: #f8f9fa;
   background-color: #301e88;
   padding: 5px 12px;
   font-weight: 800;
@@ -146,7 +172,7 @@ body {
 
 .xpath-content {
   padding: 10px;
-  font-family: "Monaco", "Menlo", monospace;
+  font-family: "Monaco", "Menlo", "Courier New", monospace;
   font-size: 13px;
   word-wrap: break-word;
   background: #fdfdfd;
@@ -185,8 +211,6 @@ body {
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-
-  /* Copy Icon */
   background-image: url("./images/icon-copy.png");
 }
 
@@ -208,8 +232,6 @@ body {
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-
-  /* Copy Icon */
   background-image: url("./images/icon-copied.png");
 }
 
@@ -237,6 +259,7 @@ body {
 .placeholder p {
   text-align: left;
 }
+
 
 .validation {
   font-size: 9px;
@@ -279,6 +302,7 @@ body {
   border-radius: 50px;
   font-size: 12px;
   cursor: pointer;
+  display: block;
 }
 
 .clear-all:hover {
@@ -290,6 +314,7 @@ body {
   border: 1px solid #ffeaa7;
   border-radius: 6px;
   padding: 4px 12px;
+  margin: 6px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -324,14 +349,10 @@ body {
   background: #e0a800;
 }
 
-.locked .status {
-  background: #fff3cd;
-  color: #856404;
-}
-
 .toggle-container {
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .toggle-input {
