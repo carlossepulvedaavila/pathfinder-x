@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="utf-8" />
     <title>Pathfinder-X</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -33,14 +34,6 @@
           <button class="unlock-btn" id="unlockButton">Unlock</button>
         </div>
 
-        <div class="engine-controls" id="engineControls">
-          <div class="engine-toggle" id="engineToggle">
-            <button class="engine-btn active" data-engine="v2">V2</button>
-            <button class="engine-btn" data-engine="compare">Compare</button>
-            <button class="engine-btn" data-engine="v1">V1</button>
-          </div>
-        </div>
-
         <div class="element-info" id="elementInfo">
           <div><strong>Element:</strong> <span id="elementTag"></span></div>
           <div><strong>Text:</strong> <span id="elementText"></span></div>
@@ -61,14 +54,14 @@
             />
 
             <p>
-              <strong>Hover over any element on the webpage</strong><br />
-              Click or press Space to lock and generate XPath selectors.
+              <strong>Select an element</strong><br />
+              Hover and click to generate selectors.
             </p>
           </div>
         </div>
 
         <button class="clear-all" id="clearButton" style="display: none">
-          CLEAR
+          Clear All
         </button>
       </div>
     </main>

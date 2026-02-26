@@ -147,36 +147,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep channel open for async storage callback
   }
 
-  if (message.type === "SET_XPATH_ENGINE") {
-    const tabId = message.tabId;
-    if (typeof tabId !== "number") {
-      sendResponse({ success: false, error: "Missing tabId" });
-      return false;
-    }
-
-    chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
-      if (chrome.runtime.lastError || !frames) {
-        sendResponse({ success: false });
-        return;
-      }
-      frames.forEach((frame) => {
-        chrome.tabs.sendMessage(
-          tabId,
-          {
-            type: "SET_XPATH_ENGINE",
-            engine: message.engine,
-            comparisonMode: message.comparisonMode,
-          },
-          { frameId: frame.frameId },
-          () => { void chrome.runtime.lastError; }
-        );
-      });
-      sendResponse({ success: true });
-    });
-
-    return true;
-  }
-
   return false;
 });
 
