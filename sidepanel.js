@@ -270,34 +270,139 @@ document.addEventListener("DOMContentLoaded", async () => {
     const validation = document.createElement("div");
     validation.className = "validation";
 
-    validateXPath(option).then((result) => {
-      if (!result) {
-        validation.textContent = "Validation error";
-        validation.className = "validation invalid";
-        return;
-      }
-
-      if (result.status === "unique") {
-        validation.textContent = "Unique";
-        validation.className = "validation valid";
-      } else if (result.status === "multiple") {
-        validation.textContent = `${result.count} matches`;
-        validation.className = "validation manual";
-      } else if (result.status === "manual") {
-        validation.textContent = result.message || "Manual check";
-        validation.className = "validation manual";
-      } else {
-        validation.textContent = "Not found";
-        validation.className = "validation invalid";
-      }
-    });
-
     optionDiv.appendChild(header);
     optionDiv.appendChild(content);
     content.appendChild(textSpan);
     content.appendChild(validation);
 
-    return optionDiv;
+    // Return both the DOM element and refs for batch validation
+    return { element: optionDiv, validation, option };
+  }
+
+  function applyValidationResult(validationDiv, result) {
+    if (!result) {
+      validationDiv.textContent = "Validation error";
+      validationDiv.className = "validation invalid";
+      return;
+    }
+    if (result.status === "unique") {
+      validationDiv.textContent = "Unique";
+      validationDiv.className = "validation valid";
+    } else if (result.status === "multiple") {
+      validationDiv.textContent = `${result.count} matches`;
+      validationDiv.className = "validation manual";
+    } else if (result.status === "manual") {
+      validationDiv.textContent = result.message || "Manual check";
+      validationDiv.className = "validation manual";
+    } else {
+      validationDiv.textContent = "Not found";
+      validationDiv.className = "validation invalid";
+    }
+  }
+
+  async function batchValidate(entries, context) {
+    if (entries.length === 0) return;
+
+    const shadowEntries = [];
+    const standardEntries = [];
+
+    for (const entry of entries) {
+      if (entry.option.strategy === "shadow") {
+        shadowEntries.push(entry);
+      } else {
+        standardEntries.push(entry);
+      }
+    }
+
+    try {
+      const tab = await getActiveTab();
+      if (!tab?.id) {
+        entries.forEach((e) => applyValidationResult(e.validation, { status: "invalid" }));
+        return;
+      }
+
+      const target = { tabId: tab.id };
+      const frameId = context?.frame?.frameId;
+      if (typeof frameId === "number" && frameId >= 0) {
+        target.frameIds = [frameId];
+      }
+
+      // Batch standard (xpath/css) validation in a single executeScript call
+      if (standardEntries.length > 0) {
+        const selectors = standardEntries.map((e) => ({
+          value: e.option.xpath,
+          strategy: e.option.strategy || "xpath",
+        }));
+
+        const result = await chrome.scripting.executeScript({
+          target,
+          function: (sels) => {
+            return sels.map(({ value, strategy }) => {
+              try {
+                if (strategy === "css") {
+                  return document.querySelectorAll(value).length;
+                }
+                const evaluation = document.evaluate(
+                  value, document, null,
+                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+                );
+                return evaluation.snapshotLength;
+              } catch (e) {
+                return 0;
+              }
+            });
+          },
+          args: [selectors],
+        });
+
+        const counts = result?.[0]?.result || [];
+        standardEntries.forEach((entry, i) => {
+          const count = counts[i] || 0;
+          if (count === 1) applyValidationResult(entry.validation, { status: "unique" });
+          else if (count > 1) applyValidationResult(entry.validation, { status: "multiple", count });
+          else applyValidationResult(entry.validation, { status: "invalid" });
+        });
+      }
+
+      // Batch shadow validation (all share the same host chain)
+      if (shadowEntries.length > 0) {
+        const shadow = context?.shadow;
+        if (!shadow || shadow.depth === 0 || !shadow.targetSelector) {
+          shadowEntries.forEach((e) =>
+            applyValidationResult(e.validation, { status: "manual", message: "Shadow DOM" })
+          );
+        } else {
+          const result = await chrome.scripting.executeScript({
+            target,
+            function: (hosts, targetSelector) => {
+              try {
+                let scope = document;
+                for (const host of hosts) {
+                  const selector = host.selector || host.tagName?.toLowerCase();
+                  if (!selector) return 0;
+                  const nextHost = scope.querySelector(selector);
+                  if (!nextHost || !nextHost.shadowRoot) return 0;
+                  scope = nextHost.shadowRoot;
+                }
+                return scope.querySelectorAll(targetSelector).length;
+              } catch (e) {
+                return 0;
+              }
+            },
+            args: [shadow.hosts || [], shadow.targetSelector],
+          });
+
+          const count = result?.[0]?.result || 0;
+          const status =
+            count === 1 ? { status: "unique" } :
+            count > 1 ? { status: "multiple", count } :
+            { status: "invalid" };
+          shadowEntries.forEach((e) => applyValidationResult(e.validation, status));
+        }
+      }
+    } catch (error) {
+      entries.forEach((e) => applyValidationResult(e.validation, { status: "invalid" }));
+    }
   }
 
   function displayXPaths(
@@ -340,8 +445,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       xpathContainer.appendChild(v2Label);
     }
 
+    const allEntries = [];
+
     xpaths.forEach((option) => {
-      xpathContainer.appendChild(buildXPathCard(option, false));
+      const card = buildXPathCard(option, false);
+      xpathContainer.appendChild(card.element);
+      allEntries.push(card);
     });
 
     // Render V1 cards in comparison mode
@@ -352,11 +461,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       xpathContainer.appendChild(divider);
 
       v1Xpaths.forEach((option) => {
-        xpathContainer.appendChild(buildXPathCard(option, true));
+        const card = buildXPathCard(option, true);
+        xpathContainer.appendChild(card.element);
+        allEntries.push(card);
       });
     }
 
     clearButton.style.display = "block";
+
+    // Batch validate all selectors in minimal executeScript calls
+    batchValidate(allEntries, context);
   }
 
   function updateContextDisplay(context) {
@@ -473,110 +587,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       setTimeout(() => {
         button.textContent = "Copy";
       }, 1800);
-    }
-  }
-
-  async function validateXPath(option) {
-    if (!option || !option.xpath) {
-      return { status: "invalid" };
-    }
-
-    if (option.strategy === "shadow") {
-      const shadow = currentContext?.shadow;
-      if (!shadow || shadow.depth === 0 || !shadow.targetSelector) {
-        return { status: "manual", message: "Shadow DOM" };
-      }
-
-      try {
-        const tab = await getActiveTab();
-        if (!tab || !tab.id) {
-          return { status: "manual", message: "Shadow DOM" };
-        }
-
-        const target = { tabId: tab.id };
-        const frameId = currentContext?.frame?.frameId;
-        if (typeof frameId === "number" && frameId >= 0) {
-          target.frameIds = [frameId];
-        }
-
-        const result = await chrome.scripting.executeScript({
-          target,
-          function: (hosts, targetSelector) => {
-            try {
-              let scope = document;
-              for (const host of hosts) {
-                const selector = host.selector || host.tagName?.toLowerCase();
-                if (!selector) {
-                  return 0;
-                }
-                const nextHost = scope.querySelector(selector);
-                if (!nextHost || !nextHost.shadowRoot) {
-                  return 0;
-                }
-                scope = nextHost.shadowRoot;
-              }
-              return scope.querySelectorAll(targetSelector).length;
-            } catch (error) {
-              return 0;
-            }
-          },
-          args: [shadow.hosts || [], shadow.targetSelector],
-        });
-
-        const count = (result && result[0] && result[0].result) || 0;
-        if (count === 1) return { status: "unique" };
-        if (count > 1) return { status: "multiple", count };
-        return { status: "invalid" };
-      } catch (error) {
-        return { status: "manual", message: "Shadow DOM" };
-      }
-    }
-
-    const strategy = option.strategy || "xpath";
-
-    try {
-      const tab = await getActiveTab();
-      if (!tab || !tab.id) {
-        return { status: "invalid" };
-      }
-
-      const target = { tabId: tab.id };
-      const frameId = currentContext?.frame?.frameId;
-      if (typeof frameId === "number" && frameId >= 0) {
-        target.frameIds = [frameId];
-      }
-
-      const result = await chrome.scripting.executeScript({
-        target,
-        function: (value, strategy) => {
-          try {
-            if (strategy === "css") {
-              return document.querySelectorAll(value).length;
-            }
-            if (strategy === "xpath") {
-              const evaluation = document.evaluate(
-                value,
-                document,
-                null,
-                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-                null
-              );
-              return evaluation.snapshotLength;
-            }
-            return 0;
-          } catch (error) {
-            return 0;
-          }
-        },
-        args: [option.xpath, strategy],
-      });
-
-      const count = (result && result[0] && result[0].result) || 0;
-      if (count === 1) return { status: "unique" };
-      if (count > 1) return { status: "multiple", count };
-      return { status: "invalid" };
-    } catch (error) {
-      return { status: "invalid" };
     }
   }
 

@@ -1,18 +1,15 @@
 // Background service worker for Pathfinder-X
 // Handles communication between content script and side panel
 
-// Open side panel when extension icon is clicked
-chrome.action.onClicked.addListener((tab) => {
-  chrome.sidePanel.open({ tabId: tab.id });
-});
-
-// Set side panel behavior — open on action click
+// Open side panel automatically when extension icon is clicked
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 // Keyboard shortcut to toggle inspection mode
 chrome.commands.onCommand.addListener((command) => {
   if (command === "toggle-inspect") {
-    chrome.runtime.sendMessage({ type: "TOGGLE_INSPECT" });
+    chrome.runtime.sendMessage({ type: "TOGGLE_INSPECT" }).catch(() => {
+      // Panel not open — ignore
+    });
   }
 });
 
@@ -90,6 +87,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message.type === "XPATH_LOCKED" ||
     message.type === "XPATH_UNLOCKED"
   ) {
+    const tabId = sender?.tab?.id;
+    if (typeof tabId !== "number") {
+      sendResponse({ success: false, error: "Missing tabId" });
+      return false;
+    }
+
     const enrichedMessage = {
       ...message,
       context: {
@@ -97,22 +100,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         frame: {
           ...(message.context?.frame || {}),
           frameId: sender?.frameId,
-          tabId: sender?.tab?.id,
+          tabId,
           url: message.context?.frame?.url || sender?.url || "",
         },
       },
     };
 
-    // Store per-tab so each tab's locked state is independent
-    const tabId = sender?.tab?.id;
-    const storageKey = tabId ? `tabState_${tabId}` : "tabState_unknown";
-    chrome.storage.local.set({ [storageKey]: enrichedMessage }, () => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ success: false });
-        return;
-      }
-      sendResponse({ success: true });
-    });
+    const storageKey = `tabState_${tabId}`;
+
+    // Only persist states that should survive tab switches
+    if (message.type === "XPATH_FOUND" || message.type === "XPATH_LOCKED") {
+      chrome.storage.local.set({ [storageKey]: enrichedMessage }, () => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false });
+          return;
+        }
+        sendResponse({ success: true });
+      });
+    } else {
+      // XPATH_CLEAR / XPATH_UNLOCKED — remove stale stored state
+      chrome.storage.local.remove(storageKey, () => {
+        void chrome.runtime.lastError;
+        sendResponse({ success: true });
+      });
+    }
 
     // Forward to side panel if it's open
     try {
@@ -157,6 +168,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   return false;
+});
+
+// Clean up tab state when tabs are closed (runs even when panel is closed)
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.local.remove(`tabState_${tabId}`);
 });
 
 // Context menu item for easier access

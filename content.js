@@ -28,12 +28,14 @@ function escapeXPathString(str) {
   if (!str) return '""';
   if (!str.includes('"')) return `"${str}"`;
   if (!str.includes("'")) return `'${str}'`;
-  // Use concat() for strings containing both quote types
+  // String contains both quote types — build a flat concat() expression
+  const segments = [];
   const parts = str.split('"');
-  const escaped = parts
-    .map((part, i) => (i === 0 ? `"${part}"` : `concat('"',"${part}")`))
-    .join(",");
-  return parts.length > 1 ? `concat(${escaped})` : `"${str}"`;
+  parts.forEach((part, i) => {
+    if (i > 0) segments.push("'\"'");
+    if (part) segments.push(`"${part}"`);
+  });
+  return `concat(${segments.join(",")})`;
 }
 
 // V1 XPath generation (original cascade)
@@ -531,8 +533,7 @@ function getOptimizedXPathV2(element) {
   }
 
   // Priority 2: Name + type combination (form elements)
-  const FORM_TAGS = ["INPUT", "SELECT", "TEXTAREA", "BUTTON"];
-  if (FORM_TAGS.includes(element.tagName)) {
+  if (FORM_TAGS.has(element.tagName)) {
     const name = element.getAttribute("name");
     const type = element.getAttribute("type");
 
@@ -828,8 +829,8 @@ function buildShadowLocator(element) {
   let expression = "document";
 
   chain.forEach((step, index) => {
-    // Use CSS.escape via the selector which was already built with CSS.escape
-    const normalized = step.selector.replace(/'/g, "\\'");
+    // Escape for safe embedding inside a JS single-quoted string
+    const normalized = step.selector.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     expression += `.querySelector('${normalized}')`;
     if (index !== chain.length - 1) {
       expression += ".shadowRoot";
@@ -1020,6 +1021,8 @@ const WRAPPER_TAGS = new Set([
   "DIV", "SPAN", "SVG", "PATH", "G", "IMG", "I",
   "EM", "STRONG", "B", "P", "SMALL",
 ]);
+
+const FORM_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA", "BUTTON"]);
 
 function resolveSmartTarget(element) {
   if (SEMANTIC_TARGETS.has(element.tagName)) return element;
@@ -1291,6 +1294,9 @@ function lockElement(element) {
   const payload = gatherSelectionData(lockedElement);
 
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
+    isLocked = false;
+    lockedElement = null;
+    hoverEnabled = hoverPreference;
     return;
   }
 
@@ -1321,6 +1327,11 @@ function handleKeyDown(event) {
   }
 
   if (event.code === "Space" && isPanelOpen) {
+    // Don't intercept Space in form fields or editable elements
+    const tag = event.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable) {
+      return;
+    }
     event.preventDefault();
     if (isLocked) {
       unlockElement();
@@ -1405,7 +1416,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hoverPreference = true;
     if (!isLocked) {
       hoverEnabled = true;
-      isPanelOpen = true;
       attachHoverListeners();
     }
     sendResponse({ success: true });
@@ -1414,8 +1424,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hoverEnabled = false;
     // If locked, fully release the lock so state doesn't go stale
     if (isLocked) {
-      isLocked = false;
-      lockedElement = null;
+      unlockElement();
     }
     removeHighlight();
     lastElement = null;
