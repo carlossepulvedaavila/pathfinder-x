@@ -236,6 +236,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       isLocked = false;
       lockControls.style.display = "none";
       clearDisplay();
+    } else if (message.type === "TOGGLE_INSPECT") {
+      toggle.checked = !toggle.checked;
+      toggle.dispatchEvent(new Event("change"));
     }
   });
 
@@ -438,8 +441,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     p.appendChild(strong);
     p.appendChild(br);
     p.appendChild(text);
+
     placeholder.appendChild(img);
     placeholder.appendChild(p);
+
     xpathContainer.appendChild(placeholder);
 
     elementInfoContainer.style.display = "none";
@@ -739,6 +744,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         await sendMessageToAllFrames({ type: "PANEL_OPENED" });
         if (toggle.checked) {
           await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
+        } else {
+          await sendMessageToAllFrames({ type: "DISABLE_HOVER" });
         }
 
         // Sync engine preference after navigation

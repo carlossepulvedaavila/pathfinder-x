@@ -24,6 +24,16 @@ Pathfinder-X is a simple and powerful Chrome extension that helps you find the b
 5.  **Lock an element:** Click on an element or press **Space** to lock it. Press **Space** again to unlock.
 6.  **Copy the XPath:** Click the "Copy" button to copy any selector to your clipboard.
 
+## ⌨️ Keyboard Shortcuts
+
+| Action | Windows/Linux | Mac |
+|---|---|---|
+| Open/close side panel | `Ctrl+Shift+X` | `⌘+Shift+X` |
+| Toggle element inspection | `Alt+Shift+X` | `⌥+Shift+X` |
+| Lock/unlock element | `Space` | `Space` |
+
+Shortcuts can be customized at `chrome://extensions/shortcuts`.
+
 ## 🛠️ Development
 
 Interested in contributing to Pathfinder-X? Here's how to get started:

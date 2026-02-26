@@ -9,6 +9,13 @@ chrome.action.onClicked.addListener((tab) => {
 // Set side panel behavior — open on action click
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
+// Keyboard shortcut to toggle inspection mode
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "toggle-inspect") {
+    chrome.runtime.sendMessage({ type: "TOGGLE_INSPECT" });
+  }
+});
+
 // Detect side panel close via port disconnect and clean up content script state
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "sidepanel") return;
