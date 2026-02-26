@@ -501,12 +501,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const strong = document.createElement("strong");
     strong.textContent = isLocked
       ? "Element is locked."
-      : "Hover over any element on the webpage";
+      : "Select an element";
     const br = document.createElement("br");
     const text = document.createTextNode(
       isLocked
         ? " Click 'Unlock' to resume hover detection."
-        : " Click or press Space to lock and generate XPath selectors."
+        : " Hover and click to generate selectors."
     );
 
     p.appendChild(strong);
