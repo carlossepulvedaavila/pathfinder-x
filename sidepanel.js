@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", async () => {
-  // Establish a port so the background can detect when the panel closes
-  chrome.runtime.connect({ name: "sidepanel" });
+  // Establish a port so the background can detect when the panel closes.
+  // Keep a reference to prevent the Port from being garbage-collected prematurely.
+  const sidepanelPort = chrome.runtime.connect({ name: "sidepanel" }); // eslint-disable-line no-unused-vars
 
   const xpathContainer = document.getElementById("xpathContainer");
   const elementInfoContainer = document.getElementById("elementInfo");
@@ -669,7 +670,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       await sendMessageToAllFrames({ type: "DISABLE_HOVER" });
       chrome.storage.local.set({ isHoveringEnabled: false });
-      // Clear lock UI but keep XPath data visible for copying
+      // Clear lock UI and state when inspection is toggled off
       if (isLocked) {
         isLocked = false;
         lockControls.style.display = "none";
@@ -771,8 +772,4 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Clean up storage when tabs are closed
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    chrome.storage.local.remove(storageKeyForTab(tabId));
-  });
 });

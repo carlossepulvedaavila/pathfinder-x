@@ -891,12 +891,16 @@ function describeFrameElement(frameEl) {
   }
 
   if (frameEl.name) {
-    return `${frameEl.tagName.toLowerCase()}[name=${escapeXPathString(frameEl.name)}]`;
+    // Display-only string — use CSS-style quoting, not XPath escaping
+    const nameVal = frameEl.name.includes('"') ? `'${frameEl.name}'` : `"${frameEl.name}"`;
+    return `${frameEl.tagName.toLowerCase()}[name=${nameVal}]`;
   }
 
   const src = frameEl.getAttribute("src");
   if (src) {
-    return `${frameEl.tagName.toLowerCase()}[src=${escapeXPathString(src)}]`;
+    // Display-only string — use CSS-style quoting, not XPath escaping
+    const srcVal = src.includes('"') ? `'${src}'` : `"${src}"`;
+    return `${frameEl.tagName.toLowerCase()}[src=${srcVal}]`;
   }
 
   const parent = frameEl.parentElement;

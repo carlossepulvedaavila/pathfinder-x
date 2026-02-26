@@ -18,23 +18,33 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "sidepanel") return;
 
   port.onDisconnect.addListener(() => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs?.[0];
-      if (!tab?.id) return;
+    const tabIdFromPort = port.sender?.tab?.id;
 
-      chrome.webNavigation.getAllFrames({ tabId: tab.id }, (frames) => {
+    function sendPanelClosed(tabId) {
+      chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
         if (chrome.runtime.lastError || !frames) return;
 
         frames.forEach((frame) => {
           chrome.tabs.sendMessage(
-            tab.id,
+            tabId,
             { type: "PANEL_CLOSED" },
             { frameId: frame.frameId },
             () => void chrome.runtime.lastError
           );
         });
       });
-    });
+    }
+
+    if (typeof tabIdFromPort === "number") {
+      sendPanelClosed(tabIdFromPort);
+    } else {
+      // Fallback: best-effort cleanup using active tab if sender.tab is unavailable
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs?.[0];
+        if (!tab?.id) return;
+        sendPanelClosed(tab.id);
+      });
+    }
   });
 });
 
