@@ -895,6 +895,9 @@ let hoverPreference = true;
 // Iframe peek-through overlay tracking
 let iframeOverlays = [];
 let iframeMutationObserver = null;
+let _repositionRafId = null;
+// Tracks iframes that have a pending load listener so we don't double-attach.
+const iframeLoadListened = new WeakSet();
 
 function cleanup() {
   isExtensionValid = false;
@@ -923,8 +926,8 @@ function attachHoverListeners() {
 
   createIframeOverlays();
   startIframeObserver();
-  window.addEventListener("scroll", handleOverlayReposition, { passive: true });
-  window.addEventListener("resize", handleOverlayReposition, { passive: true });
+  window.addEventListener("scroll", repositionAllIframeOverlays, { passive: true });
+  window.addEventListener("resize", repositionAllIframeOverlays, { passive: true });
 }
 
 function detachHoverListeners() {
@@ -937,8 +940,8 @@ function detachHoverListeners() {
 
   removeIframeOverlays();
   stopIframeObserver();
-  window.removeEventListener("scroll", handleOverlayReposition);
-  window.removeEventListener("resize", handleOverlayReposition);
+  window.removeEventListener("scroll", repositionAllIframeOverlays);
+  window.removeEventListener("resize", repositionAllIframeOverlays);
 }
 
 function createHighlightOverlay() {
@@ -1011,10 +1014,23 @@ function positionOverlayOnIframe(overlay, iframe) {
   const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
   const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
 
+  // Overlays are position:absolute children of document.body. If body or an
+  // ancestor has a CSS transform or non-static position the offsets will be
+  // relative to that ancestor rather than the viewport, causing misalignment.
+  // This is an accepted edge-case limitation for extension-injected overlays.
   overlay.style.top = (rect.top + scrollTop) + "px";
   overlay.style.left = (rect.left + scrollLeft) + "px";
   overlay.style.width = rect.width + "px";
   overlay.style.height = rect.height + "px";
+}
+
+function attachIframeLoadListener(iframe) {
+  if (iframeLoadListened.has(iframe)) return;
+  iframeLoadListened.add(iframe);
+  iframe.addEventListener("load", () => {
+    iframeLoadListened.delete(iframe);
+    createIframeOverlays();
+  }, { once: true });
 }
 
 function createIframeOverlays() {
@@ -1023,7 +1039,12 @@ function createIframeOverlays() {
   const iframes = document.querySelectorAll("iframe");
 
   iframes.forEach((iframe) => {
-    if (!isIframeAccessible(iframe)) return;
+    if (!isIframeAccessible(iframe)) {
+      // Iframe not yet loaded or cross-origin — watch for load so we can
+      // create an overlay once the same-origin content becomes accessible.
+      attachIframeLoadListener(iframe);
+      return;
+    }
 
     const overlay = document.createElement("div");
     overlay.className = "pathfinder-x-iframe-overlay";
@@ -1056,15 +1077,15 @@ function removeIframeOverlays() {
 }
 
 function repositionAllIframeOverlays() {
-  iframeOverlays.forEach(({ overlay, iframe }) => {
-    if (iframe.isConnected) {
-      positionOverlayOnIframe(overlay, iframe);
-    }
+  if (_repositionRafId !== null) return;
+  _repositionRafId = requestAnimationFrame(() => {
+    _repositionRafId = null;
+    iframeOverlays.forEach(({ overlay, iframe }) => {
+      if (iframe.isConnected) {
+        positionOverlayOnIframe(overlay, iframe);
+      }
+    });
   });
-}
-
-function handleOverlayReposition() {
-  repositionAllIframeOverlays();
 }
 
 // Compute the CSS transform scale factor between the iframe's layout size
@@ -1532,6 +1553,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isPanelOpen = true;
     hoverEnabled = hoverPreference && !isLocked;
     attachHoverListeners();
+
+    // Re-draw the highlight if the panel was reopened while an element is
+    // still locked (e.g. rapid close/reopen before PANEL_CLOSED fires).
+    if (isLocked && lockedElement && lockedElement.isConnected) {
+      if (lockedIframeEl && lockedIframeEl.isConnected) {
+        highlightElementInIframe(lockedElement, lockedIframeEl);
+      } else {
+        highlightElement(lockedElement);
+      }
+      updateHighlightStyle(true);
+    }
+
     sendResponse({ success: true });
   } else if (message.type === "PANEL_CLOSED") {
     isPanelOpen = false;
