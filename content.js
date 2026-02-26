@@ -909,6 +909,11 @@ function cleanup() {
     throttleTimeout = null;
   }
 
+  if (_repositionRafId !== null) {
+    cancelAnimationFrame(_repositionRafId);
+    _repositionRafId = null;
+  }
+
   if (contextCheckInterval) {
     clearInterval(contextCheckInterval);
     contextCheckInterval = null;
@@ -943,6 +948,11 @@ function detachHoverListeners() {
   stopIframeObserver();
   window.removeEventListener("scroll", repositionAllIframeOverlays);
   window.removeEventListener("resize", repositionAllIframeOverlays);
+
+  if (_repositionRafId !== null) {
+    cancelAnimationFrame(_repositionRafId);
+    _repositionRafId = null;
+  }
 }
 
 function createHighlightOverlay() {
@@ -1002,9 +1012,7 @@ function removeHighlight() {
 function isIframeAccessible(iframe) {
   try {
     const doc = iframe.contentDocument;
-    if (!doc) return false;
-    void doc.documentElement;
-    return true;
+    return !!(doc && doc.documentElement);
   } catch (e) {
     return false;
   }
@@ -1035,6 +1043,7 @@ function attachIframeLoadListener(iframe) {
 }
 
 function createIframeOverlays() {
+  if (!document.body) return;
   removeIframeOverlays();
 
   const iframes = document.querySelectorAll("iframe");
@@ -1283,14 +1292,16 @@ function startIframeObserver() {
     for (const mutation of mutations) {
       if (mutation.type === "childList") {
         for (const node of mutation.addedNodes) {
-          if (node.nodeName === "IFRAME" || (node.querySelector && node.querySelector("iframe"))) {
+          if (node.nodeName === "IFRAME" ||
+            (node.nodeType === Node.ELEMENT_NODE && node.querySelector("iframe"))) {
             iframeChanged = true;
             break;
           }
         }
         if (!iframeChanged) {
           for (const node of mutation.removedNodes) {
-            if (node.nodeName === "IFRAME" || (node.querySelector && node.querySelector("iframe"))) {
+            if (node.nodeName === "IFRAME" ||
+              (node.nodeType === Node.ELEMENT_NODE && node.querySelector("iframe"))) {
               iframeChanged = true;
               break;
             }
@@ -1305,6 +1316,7 @@ function startIframeObserver() {
     }
   });
 
+  if (!document.body) return;
   iframeMutationObserver.observe(document.body, {
     childList: true,
     subtree: true,
