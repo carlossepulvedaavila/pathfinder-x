@@ -740,7 +740,7 @@ function buildElementInfo(element, context) {
     id: element?.id || "",
     className: element?.className || "",
     textContent: element?.textContent
-      ? element.textContent.trim().substring(0, 50)
+      ? element.textContent.trim().replace(/\s+/g, " ").substring(0, 50)
       : "",
     frameUrl: context?.frame?.url || "",
     frameOrigin: context?.frame?.origin || "",
@@ -881,6 +881,7 @@ function withDocument(doc, fn) {
 // State management
 let highlightedElement = null;
 let lastElement = null;
+let lastIframeEl = null;
 let throttleTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
@@ -1171,6 +1172,7 @@ function handleIframeMouseMove(event, iframe) {
   if (element === iframeDoc.documentElement || element === iframeDoc.body) return;
 
   lastElement = element;
+  lastIframeEl = iframe;
 
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
@@ -1223,6 +1225,7 @@ function handleIframeMouseLeave(event, iframe) {
 
   removeHighlight();
   lastElement = null;
+  lastIframeEl = null;
 
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
@@ -1343,6 +1346,7 @@ function handleMouseOver(event) {
   }
 
   lastElement = element;
+  lastIframeEl = null;
 
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
@@ -1503,7 +1507,11 @@ function handleKeyDown(event) {
     if (isLocked) {
       unlockElement();
     } else if (hoverEnabled && lastElement) {
-      lockElement(lastElement);
+      if (lastIframeEl) {
+        lockElementInIframe(lastElement, lastIframeEl);
+      } else {
+        lockElement(lastElement);
+      }
     }
   }
 }
@@ -1543,7 +1551,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (isLocked) {
       unlockElement();
     } else if (hoverEnabled && lastElement) {
-      lockElement(lastElement);
+      if (lastIframeEl) {
+        lockElementInIframe(lastElement, lastIframeEl);
+      } else {
+        lockElement(lastElement);
+      }
     }
     sendResponse({ success: true });
   } else if (message.type === "UNLOCK_ELEMENT") {
