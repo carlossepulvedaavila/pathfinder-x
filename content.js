@@ -163,82 +163,7 @@ function generateXPathOptions(element) {
   }
 }
 
-function generateAlternativeXPathsV1(element) {
-  const alternatives = [];
-
-  // Alternative 1: Tag + any meaningful attribute
-  const meaningfulAttrs = [
-    "name",
-    "type",
-    "placeholder",
-    "aria-label",
-    "title",
-  ];
-  for (const attr of meaningfulAttrs) {
-    const value = element.getAttribute(attr);
-    if (value && value.length < 50) {
-      alternatives.push({
-        type: `By ${attr}`,
-        xpath: `//${element.tagName.toLowerCase()}[@${attr}=${escapeXPathString(value)}]`,
-        strategy: "xpath",
-      });
-      break;
-    }
-  }
-
-  // Alternative 2: Tag + partial class match
-  if (element.className && typeof element.className === "string") {
-    const classes = element.className.trim().split(/\s+/).filter(Boolean);
-    const meaningfulClass = classes.find(
-      (cls) =>
-        cls.length > 3 &&
-        !cls.match(/^(d-|flex|text-|bg-|border-|p-|m-|col-)/)
-    );
-
-    if (meaningfulClass) {
-      alternatives.push({
-        type: "By class",
-        xpath: `//${element.tagName.toLowerCase()}[contains(@class,${escapeXPathString(meaningfulClass)})]`,
-        strategy: "xpath",
-      });
-    }
-  }
-
-  // Alternative 3: Text content
-  if (
-    ["BUTTON", "A", "SPAN", "LABEL", "H1", "H2", "H3"].includes(
-      element.tagName
-    )
-  ) {
-    const text = element.textContent?.trim();
-    if (text && text.length > 2 && text.length < 30) {
-      alternatives.push({
-        type: "By text",
-        xpath: `//${element.tagName.toLowerCase()}[contains(text(),${escapeXPathString(text)})]`,
-        strategy: "xpath",
-      });
-    }
-  }
-
-  // Alternative 4: Position-based (only for common interactive elements)
-  if (["INPUT", "BUTTON", "SELECT", "A"].includes(element.tagName)) {
-    const similarElements = _activeDoc.querySelectorAll(
-      element.tagName.toLowerCase()
-    );
-    const position = Array.from(similarElements).indexOf(element) + 1;
-    if (position > 0 && position <= 5) {
-      alternatives.push({
-        type: "By position",
-        xpath: `(//${element.tagName.toLowerCase()})[${position}]`,
-        strategy: "xpath",
-      });
-    }
-  }
-
-  return alternatives;
-}
-
-// --- V2 Engine: Shared helpers ---
+// --- Shared helpers ---
 
 function isUniqueXPath(xpath) {
   try {
@@ -367,8 +292,6 @@ function buildRelativePath(fromAncestor, toElement) {
 
   return path.join("/");
 }
-
-// --- V2 Engine: Optimized XPath with new cascade ---
 
 function getOptimizedXPathV2(element) {
   const tag = element.tagName.toLowerCase();
@@ -534,8 +457,6 @@ function getOptimizedXPathV2(element) {
   // Priority 10: Full structural fallback
   return getStructuralXPath(element);
 }
-
-// --- V2 Engine: Alternative XPaths ---
 
 function generateAlternativeXPathsV2(element) {
   const alternatives = [];
@@ -872,11 +793,6 @@ function gatherSelectionData(element, iframeEl) {
   const elementDoc = element.ownerDocument || document;
 
   const generate = () => {
-    if (comparisonMode) {
-      const xpaths = generateXPathOptions(element, "v2");
-      const v1Xpaths = generateXPathOptions(element, "v1");
-      return { xpaths, v1Xpaths, context, elementInfo, comparisonMode: true };
-    }
     const xpaths = generateXPathOptions(element);
     return { xpaths, context, elementInfo };
   };
@@ -975,8 +891,6 @@ let isPanelOpen = false;
 let hoverEnabled = false;
 let listenersAttached = false;
 let hoverPreference = true;
-let xpathEngine = "v2";
-let comparisonMode = false;
 
 // Iframe peek-through overlay tracking
 let iframeOverlays = [];
@@ -1601,22 +1515,6 @@ function unlockElement() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PING") {
     sendResponse({ success: true });
-    return;
-  }
-
-  if (message.type === "SET_XPATH_ENGINE") {
-    xpathEngine = message.engine || "v2";
-    comparisonMode = !!message.comparisonMode;
-    sendResponse({ success: true });
-
-    // Re-generate selectors for locked element with new engine
-    if (isLocked && lockedElement && lockedElement.isConnected) {
-      const payload = gatherSelectionData(lockedElement, lockedIframeEl);
-      const msg = { type: "XPATH_LOCKED", ...payload };
-      try {
-        chrome.runtime.sendMessage(msg, () => { void chrome.runtime.lastError; });
-      } catch (e) { /* context may be invalid */ }
-    }
     return;
   }
 

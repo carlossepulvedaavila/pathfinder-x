@@ -15,14 +15,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
   const toggle = document.getElementById("toggle");
-  const engineToggle = document.getElementById("engineToggle");
 
   let currentXPaths = [];
   let currentContext = null;
   let isLocked = false;
-  let currentEngine = "v2";
-  let currentComparisonMode = false;
-  let currentV1XPaths = [];
 
   function storageKeyForTab(tabId) {
     return `tabState_${tabId}`;
@@ -141,7 +137,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       (saved.type === "XPATH_FOUND" || saved.type === "XPATH_LOCKED")
     ) {
       const locked = saved.type === "XPATH_LOCKED";
-      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context, saved.v1Xpaths);
+      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context);
 
       if (locked) {
         isLocked = true;
@@ -173,30 +169,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
 
-    // Restore engine preference
-    const engineResult = await chrome.storage.local.get(["xpathEngine", "comparisonMode"]);
-    if (engineResult.xpathEngine) {
-      currentEngine = engineResult.xpathEngine;
-    }
-    if (engineResult.comparisonMode) {
-      currentComparisonMode = true;
-    }
-
-    const activeEngine = currentComparisonMode ? "compare" : currentEngine;
-    engineToggle.querySelectorAll(".engine-btn").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.engine === activeEngine);
-    });
-
     const tab = await getActiveTab();
-    if (tab?.id) {
-      chrome.runtime.sendMessage({
-        type: "SET_XPATH_ENGINE",
-        tabId: tab.id,
-        engine: currentEngine,
-        comparisonMode: currentComparisonMode,
-      });
-    }
-
     await restoreTabState(tab?.id);
   } catch (error) {
     // Content script not available on this page
@@ -215,8 +188,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           message.xpaths,
           message.elementInfo,
           false,
-          message.context,
-          message.v1Xpaths
+          message.context
         );
       }
     } else if (message.type === "XPATH_LOCKED") {
@@ -225,8 +197,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         message.xpaths,
         message.elementInfo,
         true,
-        message.context,
-        message.v1Xpaths
+        message.context
       );
       lockControls.style.display = "flex";
     } else if (message.type === "XPATH_CLEAR") {
@@ -243,15 +214,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  function buildXPathCard(option, isV1) {
+  function buildXPathCard(option) {
     const optionDiv = document.createElement("div");
-    optionDiv.className = isV1 ? "xpath-option v1-card" : "xpath-option";
+    optionDiv.className = "xpath-option";
 
     const header = document.createElement("div");
     header.className = "xpath-header";
 
     const typeSpan = document.createElement("span");
-    typeSpan.textContent = isV1 ? `${option.type} (v1)` : option.type;
+    typeSpan.textContent = option.type;
 
     const copyBtn = document.createElement("button");
     copyBtn.className = "copy-btn";
@@ -419,11 +390,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     xpaths,
     elementDetails,
     locked = false,
-    context = null,
-    v1Xpaths = null
+    context = null
   ) {
     currentXPaths = xpaths;
-    currentV1XPaths = v1Xpaths || [];
     currentContext = context;
 
     // Show element info
@@ -447,35 +416,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Add engine label when in comparison mode
-    if (currentComparisonMode && v1Xpaths) {
-      const v2Label = document.createElement("div");
-      v2Label.className = "engine-divider";
-      v2Label.textContent = "V2 Engine";
-      xpathContainer.appendChild(v2Label);
-    }
-
     const allEntries = [];
 
     xpaths.forEach((option) => {
-      const card = buildXPathCard(option, false);
+      const card = buildXPathCard(option);
       xpathContainer.appendChild(card.element);
       allEntries.push(card);
     });
-
-    // Render V1 cards in comparison mode
-    if (currentComparisonMode && v1Xpaths && v1Xpaths.length > 0) {
-      const divider = document.createElement("div");
-      divider.className = "engine-divider";
-      divider.textContent = "V1 Engine";
-      xpathContainer.appendChild(divider);
-
-      v1Xpaths.forEach((option) => {
-        const card = buildXPathCard(option, true);
-        xpathContainer.appendChild(card.element);
-        allEntries.push(card);
-      });
-    }
 
     clearButton.style.display = "block";
 
@@ -632,40 +579,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Engine toggle
-  engineToggle.addEventListener("click", async (e) => {
-    const btn = e.target.closest(".engine-btn");
-    if (!btn) return;
-
-    const engine = btn.dataset.engine;
-
-    engineToggle.querySelectorAll(".engine-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-
-    if (engine === "compare") {
-      currentEngine = "v2";
-      currentComparisonMode = true;
-    } else {
-      currentEngine = engine;
-      currentComparisonMode = false;
-    }
-
-    const tab = await getActiveTab();
-    if (tab?.id) {
-      chrome.runtime.sendMessage({
-        type: "SET_XPATH_ENGINE",
-        tabId: tab.id,
-        engine: currentEngine,
-        comparisonMode: currentComparisonMode,
-      });
-    }
-
-    chrome.storage.local.set({
-      xpathEngine: currentEngine,
-      comparisonMode: currentComparisonMode,
-    });
-  });
-
   async function enableHover() {
     try {
       await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
@@ -733,17 +646,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
       }
 
-      // Sync engine preference to new tab
-      const activeTab = await getActiveTab();
-      if (activeTab?.id) {
-        chrome.runtime.sendMessage({
-          type: "SET_XPATH_ENGINE",
-          tabId: activeTab.id,
-          engine: currentEngine,
-          comparisonMode: currentComparisonMode,
-        });
-      }
-
       await restoreTabState(activeInfo.tabId);
     } catch (error) {
       // Tab change handling failed
@@ -768,13 +670,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           await sendMessageToAllFrames({ type: "DISABLE_HOVER" });
         }
 
-        // Sync engine preference after navigation
-        chrome.runtime.sendMessage({
-          type: "SET_XPATH_ENGINE",
-          tabId,
-          engine: currentEngine,
-          comparisonMode: currentComparisonMode,
-        });
       }
     } catch (error) {
       // Tab update handling failed
