@@ -837,6 +837,12 @@ const WRAPPER_TAGS = new Set([
 const FORM_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA", "BUTTON"]);
 
 function resolveSmartTarget(element) {
+  // SVG child elements (path, circle, rect, etc.) → select the parent <svg>
+  if (element instanceof SVGElement && element.tagName !== "svg") {
+    const svg = element.closest("svg");
+    if (svg) return svg;
+  }
+
   if (SEMANTIC_TARGETS.has(element.tagName)) return element;
 
   const role = element.getAttribute("role");
