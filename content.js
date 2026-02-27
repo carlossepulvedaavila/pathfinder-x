@@ -38,6 +38,16 @@ function escapeXPathString(str) {
   return `concat(${segments.join(",")})`;
 }
 
+// SVG elements live in the SVG namespace, so bare tag names (e.g. "svg")
+// won't match via document.evaluate() without a namespace resolver.
+// Use *[local-name()="tag"] for SVG elements instead.
+function xpathTag(element) {
+  if (element instanceof SVGElement) {
+    return `*[local-name()="${element.tagName.toLowerCase()}"]`;
+  }
+  return element.tagName.toLowerCase();
+}
+
 function getStructuralXPath(element) {
   if (element.tagName === "HTML") {
     return "/html";
@@ -63,7 +73,7 @@ function getStructuralXPath(element) {
   }
 
   const parentPath = getStructuralXPath(parent);
-  return `${parentPath}/${element.tagName.toLowerCase()}${position}`;
+  return `${parentPath}/${xpathTag(element)}${position}`;
 }
 
 function isUniqueSelector(option) {
@@ -82,6 +92,65 @@ function filterUniqueOptions(options) {
   const unique = options.filter(isUniqueSelector);
   // Always return at least the structural/first option so the card isn't empty
   return unique.length > 0 ? unique : options.slice(0, 1);
+}
+
+function isI18nSafeXPath(xpath) {
+  return !/text\(\)|normalize-space\(\.?\)/.test(xpath);
+}
+
+// Generate a table-position XPath for TD/TH elements (e.g. //table[@id='x']/tbody/tr[3]/td[2])
+function generateTablePositionXPath(element) {
+  const tag = element.tagName;
+  if (tag !== "TD" && tag !== "TH") return null;
+
+  const row = element.parentElement;
+  if (!row || row.tagName !== "TR") return null;
+
+  // Find column index (1-based)
+  const colIndex = Array.from(row.children)
+    .filter(c => c.tagName === "TD" || c.tagName === "TH")
+    .indexOf(element) + 1;
+
+  // Find row section (tbody/thead/tfoot) and row index within it
+  const rowParent = row.parentElement;
+  if (!rowParent) return null;
+
+  const rowIndex = Array.from(rowParent.children)
+    .filter(c => c.tagName === "TR")
+    .indexOf(row) + 1;
+
+  // Find the TABLE ancestor
+  const table = element.closest("table");
+  if (!table) return null;
+
+  // Build table identifier
+  let tableSelector = "//table";
+  if (table.id) {
+    tableSelector = `//table[@id='${table.id}']`;
+  } else {
+    const ariaLabel = table.getAttribute("aria-label");
+    const testId = table.getAttribute("data-testid") || table.getAttribute("data-test");
+    if (ariaLabel) {
+      tableSelector = `//table[@aria-label='${ariaLabel}']`;
+    } else if (testId) {
+      const attrName = table.getAttribute("data-testid") ? "data-testid" : "data-test";
+      tableSelector = `//table[@${attrName}='${testId}']`;
+    } else {
+      // Fallback: use class or position
+      const className = table.className?.split(/\s+/).filter(Boolean)[0];
+      if (className) {
+        tableSelector = `//table[contains(@class,'${className}')]`;
+      }
+    }
+  }
+
+  // Build section path (tbody, thead, tfoot)
+  const sectionTag = rowParent.tagName.toLowerCase();
+  const sectionPart = (sectionTag === "tbody" || sectionTag === "thead" || sectionTag === "tfoot")
+    ? `/${sectionTag}` : "";
+
+  const cellTag = tag.toLowerCase();
+  return `${tableSelector}${sectionPart}/tr[${rowIndex}]/${cellTag}[${colIndex}]`;
 }
 
 // Generate multiple XPath options
@@ -112,6 +181,15 @@ function generateXPathOptions(element) {
       });
     }
 
+    const tableXPath = generateTablePositionXPath(element);
+    if (tableXPath && !options.find((opt) => opt.xpath === tableXPath)) {
+      options.push({
+        type: "By table position",
+        xpath: tableXPath,
+        strategy: "xpath",
+      });
+    }
+
     try {
       const cssSelector = getCSSSelector(element);
       if (cssSelector && cssSelector.length < 100) {
@@ -138,6 +216,7 @@ function generateXPathOptions(element) {
     }
 
     const filtered = filterUniqueOptions(options);
+    filtered.forEach(opt => { opt.i18nSafe = isI18nSafeXPath(opt.xpath); });
 
     if (filtered.length > 5) {
       const shadowOption = filtered.find((opt) => opt.strategy === "shadow");
@@ -158,6 +237,7 @@ function generateXPathOptions(element) {
         type: "Basic",
         xpath: getStructuralXPath(element),
         strategy: "xpath",
+        i18nSafe: true,
       },
     ];
   }
@@ -281,7 +361,7 @@ function buildRelativePath(fromAncestor, toElement) {
     const siblings = Array.from(parent.children).filter(
       child => child.tagName === current.tagName
     );
-    let step = current.tagName.toLowerCase();
+    let step = xpathTag(current);
     if (siblings.length > 1) {
       const index = siblings.indexOf(current) + 1;
       step += `[${index}]`;
@@ -294,7 +374,7 @@ function buildRelativePath(fromAncestor, toElement) {
 }
 
 function getOptimizedXPathV2(element) {
-  const tag = element.tagName.toLowerCase();
+  const tag = xpathTag(element);
 
   // Priority 1: Stable ID
   if (element.id) {
@@ -460,7 +540,7 @@ function getOptimizedXPathV2(element) {
 
 function generateAlternativeXPathsV2(element) {
   const alternatives = [];
-  const tag = element.tagName.toLowerCase();
+  const tag = xpathTag(element);
 
   // Alt 1: By aria-label
   const ariaLabel = element.getAttribute("aria-label");
@@ -785,7 +865,7 @@ function buildPeekContext(element, iframeEl) {
   return { frame, shadow };
 }
 
-function gatherSelectionData(element, iframeEl) {
+function gatherSelectionData(element, iframeEl, includeDomTree = false) {
   const context = iframeEl
     ? buildPeekContext(element, iframeEl)
     : buildContext(element);
@@ -794,7 +874,11 @@ function gatherSelectionData(element, iframeEl) {
 
   const generate = () => {
     const xpaths = generateXPathOptions(element);
-    return { xpaths, context, elementInfo };
+    const result = { xpaths, context, elementInfo };
+    if (includeDomTree) {
+      result.domTree = buildDomTree(element);
+    }
+    return result;
   };
 
   // If the element is from a different document (iframe peek-through),
@@ -867,6 +951,162 @@ function resolveSmartTarget(element) {
   }
 
   return element;
+}
+
+// ── DOM Context Tree ──────────────────────────────────────────────
+// Builds a serialized DOM tree around the locked element for the side panel.
+// Captures ancestors up to a significant boundary, all siblings at each level,
+// and children several levels deep. The side panel renders this with
+// expand/collapse controls.
+
+const CONTEXT_BOUNDARY_TAGS = new Set([
+  "FORM", "NAV", "SECTION", "ARTICLE", "ASIDE", "MAIN", "HEADER", "FOOTER",
+  "UL", "OL", "TABLE", "THEAD", "TBODY", "TR", "DL", "FIELDSET", "DIALOG",
+  "FIGURE",
+]);
+
+function isSignificantNode(el) {
+  if (el.id) return true;
+  if (el.getAttribute("role")) return true;
+  if (SEMANTIC_TARGETS.has(el.tagName) || CONTEXT_BOUNDARY_TAGS.has(el.tagName)) return true;
+  if (el.tagName.includes("-")) return true;
+  if (el.shadowRoot) return true;
+  return !WRAPPER_TAGS.has(el.tagName);
+}
+
+// Returns { root, defaultDepth } — root is always body (or as high as we can go),
+// defaultDepth is the suggested initial display depth (ancestor index from root).
+function findTreeRoot(element) {
+  const doc = element.ownerDocument || document;
+  const ancestors = [];
+  let current = element.parentElement;
+
+  // Collect all ancestors up to body
+  while (current && current !== doc.documentElement) {
+    ancestors.unshift(current);
+    if (current === doc.body) break;
+    current = current.parentElement;
+  }
+
+  if (ancestors.length === 0) return { root: element, defaultDepth: 0 };
+
+  // Calculate smart default: find the best "default root" to show initially.
+  // Walk from element upward, find the first significant ancestor that provides
+  // good context, then go 1 more level above it.
+  const root = ancestors[0]; // always use the topmost (body or highest reachable)
+  let defaultDepth = 0; // index into ancestors array (0 = show from root/body)
+
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const el = ancestors[i];
+    // For table elements, always include TABLE (not just TBODY/TR)
+    if (el.tagName === "TABLE") {
+      // Go 1 above TABLE if possible
+      defaultDepth = Math.max(0, i - 1);
+      break;
+    }
+    if (isSignificantNode(el)) {
+      // Go 1 above this significant node if possible
+      defaultDepth = Math.max(0, i - 1);
+      break;
+    }
+  }
+
+  return { root, defaultDepth };
+}
+
+const TREE_ATTR_PICKS = ["role", "data-testid", "data-test", "data-cy", "data-qa",
+  "data-automation", "aria-label", "name", "type", "href", "placeholder",
+  "src", "alt", "for", "action", "method", "value"];
+
+function serializeNode(el, isTarget) {
+  const classes = [];
+  if (el.className && typeof el.className === "string") {
+    el.className.split(/\s+/).filter(Boolean).slice(0, 4).forEach(c => classes.push(c));
+  }
+
+  const attrs = {};
+  let attrCount = 0;
+  for (const key of TREE_ATTR_PICKS) {
+    if (attrCount >= 4) break;
+    const val = el.getAttribute(key);
+    if (val) {
+      attrs[key] = val.length > 50 ? val.substring(0, 50) + "\u2026" : val;
+      attrCount++;
+    }
+  }
+
+  let text = "";
+  for (const child of el.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const t = child.textContent.trim();
+      if (t) { text = t.length > 40 ? t.substring(0, 40) + "\u2026" : t; break; }
+    }
+  }
+
+  return {
+    tag: el.tagName.toLowerCase(),
+    id: el.id || "",
+    classes,
+    attrs,
+    text,
+    childCount: el.children.length,
+    isTarget: !!isTarget,
+    children: [],
+  };
+}
+
+function serializeSubtree(el, maxDepth, currentDepth) {
+  const node = serializeNode(el, false);
+  if (currentDepth < maxDepth && el.children.length > 0) {
+    const kids = Array.from(el.children);
+    node.children = kids.map(k => serializeSubtree(k, maxDepth, currentDepth + 1));
+  }
+  return node;
+}
+
+function buildDomTree(element) {
+  const { root, defaultDepth } = findTreeRoot(element);
+
+  // Build ancestor chain from root down to element
+  const chain = [];
+  let cur = element;
+  while (cur && cur !== root.parentElement) {
+    chain.unshift(cur);
+    cur = cur.parentElement;
+  }
+
+  // Recursive builder
+  function build(node, depth) {
+    const isOnPath = chain.includes(node);
+    const isTarget = node === element;
+    const treeNode = serializeNode(node, isTarget);
+
+    if (isTarget) {
+      // Serialize children of locked element 3 levels deep
+      if (node.children.length > 0) {
+        treeNode.children = Array.from(node.children)
+          .map(k => serializeSubtree(k, 3, 1));
+      }
+    } else if (isOnPath) {
+      // Show ALL siblings at this level, recurse into the one on the path
+      const pathChild = chain[depth + 1];
+      if (pathChild) {
+        treeNode.children = Array.from(node.children).map(child => {
+          if (child === pathChild) return build(child, depth + 1);
+          // Off-path siblings: serialize 1 level of children so they're expandable
+          return serializeSubtree(child, 1, 0);
+        });
+      }
+    }
+
+    return treeNode;
+  }
+
+  const tree = build(root, 0);
+  // Attach metadata for the side panel zoom controls
+  tree._defaultDepth = defaultDepth;
+  tree._totalDepth = chain.length;
+  return tree;
 }
 
 // Active document context for XPath generation.
@@ -1009,7 +1249,8 @@ function highlightElement(element) {
 
 function removeHighlight() {
   if (highlightedElement) {
-    highlightedElement.style.display = "none";
+    highlightedElement.remove();
+    highlightedElement = null;
   }
 }
 
@@ -1267,7 +1508,7 @@ function lockElementInIframe(element, iframe) {
   highlightElementInIframe(lockedElement, iframe);
   updateHighlightStyle(true);
 
-  const payload = gatherSelectionData(lockedElement, iframe);
+  const payload = gatherSelectionData(lockedElement, iframe, true);
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
     isLocked = false;
     lockedElement = null;
@@ -1480,7 +1721,7 @@ function lockElement(element) {
   highlightElement(lockedElement);
   updateHighlightStyle(true);
 
-  const payload = gatherSelectionData(lockedElement);
+  const payload = gatherSelectionData(lockedElement, null, true);
 
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
     isLocked = false;

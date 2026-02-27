@@ -1,7 +1,13 @@
 document.addEventListener("DOMContentLoaded", async () => {
   // Establish a port so the background can detect when the panel closes.
   // Keep a reference to prevent the Port from being garbage-collected prematurely.
-  const sidepanelPort = chrome.runtime.connect({ name: "sidepanel" }); // eslint-disable-line no-unused-vars
+  const sidepanelPort = chrome.runtime.connect({ name: "sidepanel" });
+
+  // Send the active tab ID so the background can target the correct tab on disconnect.
+  const activeTab = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (activeTab[0]?.id) {
+    sidepanelPort.postMessage({ type: "INIT", tabId: activeTab[0].id });
+  }
 
   const xpathContainer = document.getElementById("xpathContainer");
   const elementInfoContainer = document.getElementById("elementInfo");
@@ -15,10 +21,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
   const toggle = document.getElementById("toggle");
+  const domTreeSection = document.getElementById("domTreeSection");
+  const domTreeContainer = document.getElementById("domTree");
+  const domTreeZoomIn = document.getElementById("domTreeZoomIn");
+  const domTreeZoomOut = document.getElementById("domTreeZoomOut");
+  const domTreeContextMenu = document.getElementById("domTreeContextMenu");
+  const domTreeWrapToggle = document.getElementById("domTreeWrapToggle");
 
   let currentXPaths = [];
   let currentContext = null;
   let isLocked = false;
+  let fullTreeData = null;    // Complete serialized tree (from body down)
+  let currentZoomDepth = 0;   // How many levels to skip from the top
+  let treeWordWrap = false;
 
   function storageKeyForTab(tabId) {
     return `tabState_${tabId}`;
@@ -137,7 +152,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       (saved.type === "XPATH_FOUND" || saved.type === "XPATH_LOCKED")
     ) {
       const locked = saved.type === "XPATH_LOCKED";
-      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context);
+      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context, saved.domTree);
 
       if (locked) {
         isLocked = true;
@@ -197,7 +212,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         message.xpaths,
         message.elementInfo,
         true,
-        message.context
+        message.context,
+        message.domTree
       );
       lockControls.style.display = "flex";
     } else if (message.type === "XPATH_CLEAR") {
@@ -246,6 +262,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     optionDiv.appendChild(content);
     content.appendChild(textSpan);
     content.appendChild(validation);
+
+    if (option.i18nSafe === false) {
+      const i18nBadge = document.createElement("div");
+      i18nBadge.className = "validation i18n-warning";
+      i18nBadge.textContent = "i18n-sensitive";
+      i18nBadge.title = "This selector uses text content and may break on translated pages";
+      content.appendChild(i18nBadge);
+    }
 
     // Return both the DOM element and refs for batch validation
     return { element: optionDiv, validation, option };
@@ -386,11 +410,341 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  // ── DOM Context Tree ──────────────────────────────────────────────
+
+  function truncateStr(str, max) {
+    if (!str || str.length <= max) return str;
+    return str.substring(0, max) + "\u2026";
+  }
+
+  function hasExpandableChildren(node) {
+    return node.children && node.children.length > 0;
+  }
+
+  function isNodeOnTargetPath(node) {
+    if (node.isTarget) return true;
+    if (!node.children) return false;
+    return node.children.some(c => isNodeOnTargetPath(c));
+  }
+
+  // Walk down the target path by `depth` levels to find the subtree root to render
+  function getSubtreeAtDepth(tree, depth) {
+    let node = tree;
+    for (let i = 0; i < depth; i++) {
+      if (!node.children) return node;
+      const pathChild = node.children.find(c => isNodeOnTargetPath(c));
+      if (!pathChild) return node;
+      node = pathChild;
+    }
+    return node;
+  }
+
+  // Count how many levels exist on the target path
+  function getTargetPathLength(node) {
+    if (node.isTarget) return 0;
+    if (!node.children) return 0;
+    for (const child of node.children) {
+      if (isNodeOnTargetPath(child)) return 1 + getTargetPathLength(child);
+    }
+    return 0;
+  }
+
+  function buildTreeNodeEl(node, depth, startExpanded) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "dom-tree-node";
+
+    const line = document.createElement("div");
+    line.className = "dom-tree-line" + (node.isTarget ? " dom-tree-target" : "");
+    line.style.paddingLeft = (depth * 16 + 8) + "px";
+
+    const expandable = hasExpandableChildren(node);
+    let childrenContainer = null;
+    let expanded = startExpanded;
+
+    // Toggle arrow
+    const arrow = document.createElement("span");
+    arrow.className = "dom-tree-arrow";
+    if (expandable) {
+      arrow.textContent = expanded ? "\u25BE" : "\u25B8";
+      arrow.classList.add("dom-tree-arrow-active");
+    } else {
+      arrow.textContent = " ";
+    }
+    line.appendChild(arrow);
+
+    // Opening bracket
+    const open = document.createElement("span");
+    open.className = "dom-tree-bracket";
+    open.textContent = "<";
+    line.appendChild(open);
+
+    // Tag name
+    const tag = document.createElement("span");
+    tag.className = "dom-tree-tag";
+    tag.textContent = node.tag;
+    line.appendChild(tag);
+
+    // ID
+    if (node.id) {
+      const id = document.createElement("span");
+      id.className = "dom-tree-id";
+      id.textContent = "#" + node.id;
+      line.appendChild(id);
+    }
+
+    // Classes
+    if (node.classes && node.classes.length > 0) {
+      const cls = document.createElement("span");
+      cls.className = "dom-tree-class";
+      cls.textContent = "." + node.classes.join(".");
+      line.appendChild(cls);
+    }
+
+    // Key attributes
+    if (node.attrs) {
+      for (const [key, val] of Object.entries(node.attrs)) {
+        const attr = document.createElement("span");
+        attr.className = "dom-tree-attr";
+        attr.textContent = ` ${key}="${truncateStr(val, 25)}"`;
+        line.appendChild(attr);
+      }
+    }
+
+    // Closing bracket
+    const close = document.createElement("span");
+    close.className = "dom-tree-bracket";
+    close.textContent = ">";
+    line.appendChild(close);
+
+    // Inline text content (only for leaf-ish nodes or short text)
+    if (node.text && (!expandable || node.childCount <= 1)) {
+      const text = document.createElement("span");
+      text.className = "dom-tree-text";
+      text.textContent = node.text;
+      line.appendChild(text);
+
+      const endTag = document.createElement("span");
+      endTag.className = "dom-tree-bracket";
+      endTag.textContent = "</";
+      line.appendChild(endTag);
+      const endName = document.createElement("span");
+      endName.className = "dom-tree-tag";
+      endName.textContent = node.tag;
+      line.appendChild(endName);
+      const endClose = document.createElement("span");
+      endClose.className = "dom-tree-bracket";
+      endClose.textContent = ">";
+      line.appendChild(endClose);
+    }
+
+    // Child count indicator when collapsed and has unserialized children
+    if (node.childCount > 0 && !expandable) {
+      const count = document.createElement("span");
+      count.className = "dom-tree-childcount";
+      count.textContent = ` ${node.childCount} ${node.childCount === 1 ? "child" : "children"}`;
+      line.appendChild(count);
+    }
+
+    wrapper.appendChild(line);
+
+    // Build children container
+    if (expandable) {
+      childrenContainer = document.createElement("div");
+      childrenContainer.className = "dom-tree-children";
+      if (!expanded) childrenContainer.style.display = "none";
+
+      node.children.forEach(child => {
+        const childOnPath = isNodeOnTargetPath(child);
+        childrenContainer.appendChild(
+          buildTreeNodeEl(child, depth + 1, childOnPath)
+        );
+      });
+
+      // Closing tag line
+      const closingLine = document.createElement("div");
+      closingLine.className = "dom-tree-line dom-tree-closing";
+      closingLine.style.paddingLeft = (depth * 16 + 8) + "px";
+      const closingArrowSpacer = document.createElement("span");
+      closingArrowSpacer.className = "dom-tree-arrow";
+      closingArrowSpacer.textContent = " ";
+      closingLine.appendChild(closingArrowSpacer);
+      const closeTag = document.createElement("span");
+      closeTag.className = "dom-tree-bracket";
+      closeTag.textContent = "</";
+      closingLine.appendChild(closeTag);
+      const closeTagName = document.createElement("span");
+      closeTagName.className = "dom-tree-tag";
+      closeTagName.textContent = node.tag;
+      closingLine.appendChild(closeTagName);
+      const closeTagEnd = document.createElement("span");
+      closeTagEnd.className = "dom-tree-bracket";
+      closeTagEnd.textContent = ">";
+      closingLine.appendChild(closeTagEnd);
+      childrenContainer.appendChild(closingLine);
+
+      wrapper.appendChild(childrenContainer);
+
+      // Toggle handler
+      line.addEventListener("click", (e) => {
+        if (e.button !== 0) return;
+        expanded = !expanded;
+        arrow.textContent = expanded ? "\u25BE" : "\u25B8";
+        childrenContainer.style.display = expanded ? "" : "none";
+      });
+    }
+
+    // Right-click context menu
+    line.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showTreeContextMenu(e, node, wrapper);
+    });
+
+    return wrapper;
+  }
+
+  function updateZoomButtons() {
+    if (!fullTreeData) return;
+    const maxZoom = getTargetPathLength(fullTreeData);
+    domTreeZoomIn.disabled = currentZoomDepth >= maxZoom;
+    domTreeZoomOut.disabled = currentZoomDepth <= 0;
+  }
+
+  function renderTreeFromZoom() {
+    domTreeContainer.textContent = "";
+    if (!fullTreeData) return;
+    const subtree = getSubtreeAtDepth(fullTreeData, currentZoomDepth);
+    domTreeContainer.appendChild(buildTreeNodeEl(subtree, 0, true));
+    updateZoomButtons();
+
+    // Auto-scroll to target element
+    requestAnimationFrame(() => {
+      const target = domTreeContainer.querySelector(".dom-tree-target");
+      if (target) {
+        target.scrollIntoView({ block: "center", behavior: "instant" });
+      }
+    });
+  }
+
+  function renderDomTree(treeData) {
+    domTreeContainer.textContent = "";
+    hideTreeContextMenu();
+    if (!treeData) {
+      fullTreeData = null;
+      domTreeSection.style.display = "none";
+      return;
+    }
+    fullTreeData = treeData;
+    currentZoomDepth = treeData._defaultDepth || 0;
+    domTreeSection.style.display = "block";
+    renderTreeFromZoom();
+  }
+
+  // Zoom controls
+  domTreeZoomOut.addEventListener("click", () => {
+    if (currentZoomDepth > 0) {
+      currentZoomDepth--;
+      renderTreeFromZoom();
+    }
+  });
+
+  domTreeZoomIn.addEventListener("click", () => {
+    if (!fullTreeData) return;
+    const maxZoom = getTargetPathLength(fullTreeData);
+    if (currentZoomDepth < maxZoom) {
+      currentZoomDepth++;
+      renderTreeFromZoom();
+    }
+  });
+
+  domTreeWrapToggle.addEventListener("click", () => {
+    treeWordWrap = !treeWordWrap;
+    domTreeContainer.classList.toggle("dom-tree-wrap", treeWordWrap);
+    domTreeWrapToggle.classList.toggle("dom-tree-zoom-btn-active", treeWordWrap);
+  });
+
+  // Context menu
+  function showTreeContextMenu(e, node, nodeWrapper) {
+    domTreeContextMenu.textContent = "";
+    domTreeContextMenu.style.display = "block";
+
+    // Position relative to the tree section
+    const sectionRect = domTreeSection.getBoundingClientRect();
+    domTreeContextMenu.style.left = (e.clientX - sectionRect.left) + "px";
+    domTreeContextMenu.style.top = (e.clientY - sectionRect.top) + "px";
+
+    const items = [];
+
+    // "Zoom to here" — only for nodes on the target path, above the target
+    if (isNodeOnTargetPath(node) && !node.isTarget) {
+      items.push({
+        label: "Zoom to here",
+        action: () => {
+          // Find the depth of this node in the full tree
+          let depth = 0;
+          let cur = fullTreeData;
+          while (cur && cur !== node) {
+            const pathChild = cur.children?.find(c => isNodeOnTargetPath(c));
+            if (!pathChild) break;
+            depth++;
+            cur = pathChild;
+          }
+          currentZoomDepth = depth;
+          renderTreeFromZoom();
+        }
+      });
+    }
+
+    // Expand all / Collapse all
+    const childrenEl = nodeWrapper.querySelector(":scope > .dom-tree-children");
+    if (childrenEl) {
+      items.push({
+        label: "Expand all",
+        action: () => setExpandAll(nodeWrapper, true)
+      });
+      items.push({
+        label: "Collapse all",
+        action: () => setExpandAll(nodeWrapper, false)
+      });
+    }
+
+    if (items.length === 0) {
+      hideTreeContextMenu();
+      return;
+    }
+
+    items.forEach(item => {
+      const menuItem = document.createElement("div");
+      menuItem.className = "dom-tree-context-item";
+      menuItem.textContent = item.label;
+      menuItem.addEventListener("click", () => {
+        item.action();
+        hideTreeContextMenu();
+      });
+      domTreeContextMenu.appendChild(menuItem);
+    });
+  }
+
+  function hideTreeContextMenu() {
+    domTreeContextMenu.style.display = "none";
+    domTreeContextMenu.textContent = "";
+  }
+
+  function setExpandAll(nodeWrapper, expand) {
+    const allChildren = nodeWrapper.querySelectorAll(".dom-tree-children");
+    const allArrows = nodeWrapper.querySelectorAll(".dom-tree-arrow-active");
+    allChildren.forEach(c => c.style.display = expand ? "" : "none");
+    allArrows.forEach(a => a.textContent = expand ? "\u25BE" : "\u25B8");
+  }
+
+  // Hide context menu on click elsewhere
+  document.addEventListener("click", hideTreeContextMenu);
+
   function displayXPaths(
     xpaths,
     elementDetails,
     locked = false,
-    context = null
+    context = null,
+    domTree = null
   ) {
     currentXPaths = xpaths;
     currentContext = context;
@@ -407,6 +761,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       updateContextDisplay(context);
     } else {
       clearContextDisplay();
+    }
+
+    // Render DOM tree (only present in lock messages)
+    if (locked && domTree) {
+      renderDomTree(domTree);
+    } else {
+      renderDomTree(null);
     }
 
     // Clear container safely
@@ -519,6 +880,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     xpathContainer.appendChild(placeholder);
 
     elementInfoContainer.style.display = "none";
+    domTreeSection.style.display = "none";
+    domTreeContainer.textContent = "";
+    fullTreeData = null;
+    hideTreeContextMenu();
     clearButton.style.display = "none";
     if (!isLocked) {
       lockControls.style.display = "none";

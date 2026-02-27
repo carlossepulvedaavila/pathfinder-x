@@ -17,9 +17,17 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "sidepanel") return;
 
-  port.onDisconnect.addListener(() => {
-    const tabIdFromPort = port.sender?.tab?.id;
+  // The side panel will send its tab ID via the port since
+  // port.sender.tab is undefined for extension pages.
+  let portTabId = null;
 
+  port.onMessage.addListener((msg) => {
+    if (msg.type === "INIT" && typeof msg.tabId === "number") {
+      portTabId = msg.tabId;
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
     function sendPanelClosed(tabId) {
       chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
         if (chrome.runtime.lastError || !frames) return;
@@ -35,10 +43,10 @@ chrome.runtime.onConnect.addListener((port) => {
       });
     }
 
-    if (typeof tabIdFromPort === "number") {
-      sendPanelClosed(tabIdFromPort);
+    if (typeof portTabId === "number") {
+      sendPanelClosed(portTabId);
     } else {
-      // Fallback: best-effort cleanup using active tab if sender.tab is unavailable
+      // Fallback: best-effort cleanup using active tab
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tab = tabs?.[0];
         if (!tab?.id) return;

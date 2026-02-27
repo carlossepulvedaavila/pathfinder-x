@@ -139,6 +139,179 @@ body {
   margin-right: 4px;
 }
 
+/* ── DOM Context Tree ── */
+
+.dom-tree-section {
+  background: #ffffff;
+  margin: 0 0 8px;
+  border-radius: 8px;
+  border: 1px solid #e5e2f0;
+  overflow: visible;
+  position: relative;
+}
+
+.dom-tree-header {
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  color: #6c5ce7;
+  text-transform: uppercase;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  letter-spacing: 0.8px;
+  border-bottom: 1px solid #f0eef5;
+}
+
+.dom-tree {
+  padding: 6px 0;
+  font-family: "Monaco", "Menlo", "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  max-height: 350px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.dom-tree-node {
+  user-select: text;
+}
+
+.dom-tree-line {
+  padding: 0 8px 0 0;
+  white-space: nowrap;
+  cursor: default;
+  border-left: 2px solid transparent;
+}
+
+.dom-tree-line:hover {
+  background: #f8f7fc;
+}
+
+.dom-tree-target {
+  background: #ede8ff;
+  border-left-color: #6c5ce7;
+  font-weight: 600;
+}
+
+.dom-tree-target:hover {
+  background: #e4ddf8;
+}
+
+.dom-tree-closing {
+  color: #b2bec3;
+}
+
+.dom-tree-arrow {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  color: #999;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.dom-tree-arrow-active {
+  cursor: pointer;
+}
+
+.dom-tree-arrow-active:hover {
+  color: #6c5ce7;
+}
+
+.dom-tree-bracket {
+  color: #b2bec3;
+}
+
+.dom-tree-tag {
+  color: #6c5ce7;
+}
+
+.dom-tree-id {
+  color: #d63031;
+  font-weight: 500;
+}
+
+.dom-tree-class {
+  color: #00b894;
+}
+
+.dom-tree-attr {
+  color: #636e72;
+  font-size: 10.5px;
+}
+
+.dom-tree-text {
+  color: #636e72;
+  font-size: 10.5px;
+}
+
+.dom-tree-childcount {
+  color: #b2bec3;
+  font-size: 10px;
+  font-style: italic;
+}
+
+.dom-tree-zoom {
+  display: flex;
+  gap: 4px;
+}
+
+.dom-tree-zoom-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #e5e2f0;
+  border-radius: 4px;
+  background: #f8f9fc;
+  color: #6c5ce7;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.dom-tree-zoom-btn:hover:not(:disabled) {
+  background: #ede8ff;
+  border-color: #6c5ce7;
+}
+
+.dom-tree-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.dom-tree-zoom-btn-active {
+  background: #ede8ff;
+  border-color: #6c5ce7;
+}
+
+.dom-tree-wrap .dom-tree-line {
+  white-space: normal;
+  word-break: break-all;
+}
+
+.dom-tree-context-menu {
+  position: absolute;
+  background: #ffffff;
+  border: 1px solid #e5e2f0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(48, 30, 136, 0.15);
+  z-index: 100;
+  min-width: 130px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.dom-tree-context-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  color: #301e88;
+}
+
+.dom-tree-context-item:hover {
+  background: #f4f2fa;
+}
+
 /* ── XPath cards ── */
 
 .xpath-option {
@@ -261,6 +434,13 @@ body {
 .validation.manual {
   background-color: #fff8e1;
   color: #8a6d1b;
+}
+
+.validation.i18n-warning {
+  background-color: #e3f2fd;
+  color: #1565c0;
+  cursor: help;
+  margin-left: 6px;
 }
 
 /* ── Lock controls ── */
