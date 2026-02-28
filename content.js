@@ -1183,6 +1183,7 @@ let isExtensionValid = true;
 let contextCheckInterval = null;
 let lockedElement = null;
 let lastContextMenuTarget = null;
+let lastContextMenuIframe = null;
 let lastDomTreeRoot = null;
 let lockedIframeEl = null;
 let isLocked = false;
@@ -1412,6 +1413,16 @@ function createIframeOverlays() {
     overlay.addEventListener("mousemove", (e) => handleIframeMouseMove(e, iframe));
     overlay.addEventListener("click", (e) => handleIframeClick(e, iframe));
     overlay.addEventListener("mouseleave", (e) => handleIframeMouseLeave(e, iframe));
+    overlay.addEventListener("contextmenu", (e) => {
+      e.stopPropagation();
+      const coords = getIframeRelativeCoords(e, iframe);
+      const iframeDoc = iframe.contentDocument;
+      if (!iframeDoc) return;
+      const rawElement = iframeDoc.elementFromPoint(coords.x, coords.y);
+      if (!rawElement) return;
+      lastContextMenuTarget = resolveSmartTarget(rawElement);
+      lastContextMenuIframe = iframe;
+    });
 
     iframeOverlays.push({ overlay, iframe });
   });
@@ -1963,6 +1974,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     const target = lastContextMenuTarget;
+    const iframeEl = lastContextMenuIframe;
     // Defer lock until the side panel has opened and the viewport has
     // settled — locking immediately would position the highlight at
     // pre-resize coordinates. Also guards against the side panel init
@@ -1972,8 +1984,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       isPanelOpen = true;
       attachHoverListeners();
       if (isLocked) unlockElement();
-      lockElement(target);
+      if (iframeEl && iframeEl.isConnected) {
+        lockElementInIframe(target, iframeEl);
+      } else {
+        lockElement(target);
+      }
     }, 200);
+    lastContextMenuIframe = null;
     sendResponse({ success: true });
   } else if (message.type === "SELECT_TREE_NODE") {
     if (!lastDomTreeRoot || !lastDomTreeRoot.isConnected || !Array.isArray(message.path)) {
@@ -2066,6 +2083,7 @@ if (initializeContentScript()) {
   // Capture right-clicked element for context menu "Get XPath"
   document.addEventListener("contextmenu", (event) => {
     lastContextMenuTarget = resolveSmartTarget(event.target);
+    lastContextMenuIframe = null;
   }, { passive: true });
 
   // Check extension context lazily — only when interaction is happening
