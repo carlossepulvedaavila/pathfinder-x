@@ -38,6 +38,16 @@ function escapeXPathString(str) {
   return `concat(${segments.join(",")})`;
 }
 
+// SVG elements live in the SVG namespace, so bare tag names (e.g. "svg")
+// won't match via document.evaluate() without a namespace resolver.
+// Use *[local-name()="tag"] for SVG elements instead.
+function xpathTag(element) {
+  if (element instanceof SVGElement) {
+    return `*[local-name()="${element.tagName.toLowerCase()}"]`;
+  }
+  return element.tagName.toLowerCase();
+}
+
 function getStructuralXPath(element) {
   if (element.tagName === "HTML") {
     return "/html";
@@ -63,7 +73,7 @@ function getStructuralXPath(element) {
   }
 
   const parentPath = getStructuralXPath(parent);
-  return `${parentPath}/${element.tagName.toLowerCase()}${position}`;
+  return `${parentPath}/${xpathTag(element)}${position}`;
 }
 
 function isUniqueSelector(option) {
@@ -82,6 +92,68 @@ function filterUniqueOptions(options) {
   const unique = options.filter(isUniqueSelector);
   // Always return at least the structural/first option so the card isn't empty
   return unique.length > 0 ? unique : options.slice(0, 1);
+}
+
+function isI18nSafeXPath(xpath) {
+  // Only flags the most common text-content patterns (text(), normalize-space()).
+  // XPaths using contains(., "...") or direct string comparison are not caught here.
+  return !/text\(\)|normalize-space\(\.?\)/.test(xpath);
+}
+
+// Generate a table-position XPath for TD/TH elements (e.g. //table[@id='x']/tbody/tr[3]/td[2])
+// Note: column index is based on DOM child position and does not account for colspan/rowspan.
+function generateTablePositionXPath(element) {
+  const tag = element.tagName;
+  if (tag !== "TD" && tag !== "TH") return null;
+
+  const row = element.parentElement;
+  if (!row || row.tagName !== "TR") return null;
+
+  // Find column index (1-based)
+  const colIndex = Array.from(row.children)
+    .filter(c => c.tagName === "TD" || c.tagName === "TH")
+    .indexOf(element) + 1;
+
+  // Find row section (tbody/thead/tfoot) and row index within it
+  const rowParent = row.parentElement;
+  if (!rowParent) return null;
+
+  const rowIndex = Array.from(rowParent.children)
+    .filter(c => c.tagName === "TR")
+    .indexOf(row) + 1;
+
+  // Find the TABLE ancestor
+  const table = element.closest("table");
+  if (!table) return null;
+
+  // Build table identifier
+  let tableSelector = "//table";
+  if (table.id) {
+    tableSelector = `//table[@id=${escapeXPathString(table.id)}]`;
+  } else {
+    const ariaLabel = table.getAttribute("aria-label");
+    const testId = table.getAttribute("data-testid") || table.getAttribute("data-test");
+    if (ariaLabel) {
+      tableSelector = `//table[@aria-label=${escapeXPathString(ariaLabel)}]`;
+    } else if (testId) {
+      const attrName = table.getAttribute("data-testid") ? "data-testid" : "data-test";
+      tableSelector = `//table[@${attrName}=${escapeXPathString(testId)}]`;
+    } else {
+      // Fallback: use class or position
+      const className = table.className?.split(/\s+/).filter(Boolean)[0];
+      if (className) {
+        tableSelector = `//table[contains(@class,${escapeXPathString(className)})]`;
+      }
+    }
+  }
+
+  // Build section path (tbody, thead, tfoot)
+  const sectionTag = rowParent.tagName.toLowerCase();
+  const sectionPart = (sectionTag === "tbody" || sectionTag === "thead" || sectionTag === "tfoot")
+    ? `/${sectionTag}` : "";
+
+  const cellTag = tag.toLowerCase();
+  return `${tableSelector}${sectionPart}/tr[${rowIndex}]/${cellTag}[${colIndex}]`;
 }
 
 // Generate multiple XPath options
@@ -112,6 +184,15 @@ function generateXPathOptions(element) {
       });
     }
 
+    const tableXPath = generateTablePositionXPath(element);
+    if (tableXPath && !options.find((opt) => opt.xpath === tableXPath)) {
+      options.push({
+        type: "By table position",
+        xpath: tableXPath,
+        strategy: "xpath",
+      });
+    }
+
     try {
       const cssSelector = getCSSSelector(element);
       if (cssSelector && cssSelector.length < 100) {
@@ -138,6 +219,10 @@ function generateXPathOptions(element) {
     }
 
     const filtered = filterUniqueOptions(options);
+    filtered.forEach(opt => {
+      opt.i18nSafe = isI18nSafeXPath(opt.xpath);
+      opt.dynamicId = hasDynamicId(opt.xpath);
+    });
 
     if (filtered.length > 5) {
       const shadowOption = filtered.find((opt) => opt.strategy === "shadow");
@@ -158,6 +243,7 @@ function generateXPathOptions(element) {
         type: "Basic",
         xpath: getStructuralXPath(element),
         strategy: "xpath",
+        i18nSafe: true,
       },
     ];
   }
@@ -189,6 +275,12 @@ const DYNAMIC_ID_PATTERNS = [
 function isStableId(id) {
   if (!id || id.length < 2) return false;
   return !DYNAMIC_ID_PATTERNS.some(pattern => pattern.test(id));
+}
+
+function hasDynamicId(xpath) {
+  const match = xpath.match(/@id\s*=\s*(['"])(.+?)\1/);
+  if (!match) return false;
+  return !isStableId(match[2]);
 }
 
 const TEST_ATTRIBUTES_V2 = [
@@ -281,7 +373,7 @@ function buildRelativePath(fromAncestor, toElement) {
     const siblings = Array.from(parent.children).filter(
       child => child.tagName === current.tagName
     );
-    let step = current.tagName.toLowerCase();
+    let step = xpathTag(current);
     if (siblings.length > 1) {
       const index = siblings.indexOf(current) + 1;
       step += `[${index}]`;
@@ -294,7 +386,7 @@ function buildRelativePath(fromAncestor, toElement) {
 }
 
 function getOptimizedXPathV2(element) {
-  const tag = element.tagName.toLowerCase();
+  const tag = xpathTag(element);
 
   // Priority 1: Stable ID
   if (element.id) {
@@ -411,12 +503,28 @@ function getOptimizedXPathV2(element) {
   // Priority 8: Scoped structural with stable anchor
   const anchor = findStableAnchor(element);
   if (anchor) {
+    // 8a: Anchor + attribute-qualified descendant (e.g. anchor//*[@data-testid="x"])
+    for (const attr of TEST_ATTRIBUTES_V2) {
+      const val = element.getAttribute(attr);
+      if (val) {
+        const xpath = `${anchor.xpath}//*[@${attr}=${escapeXPathString(val)}]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+
+    for (const attr of presentAttrs) {
+      const xpath = `${anchor.xpath}//${tag}[@${attr.name}=${escapeXPathString(attr.value)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    // 8b: Anchor + structural relative path
     const relativePath = buildRelativePath(anchor.element, element);
     if (relativePath) {
       const xpath = `${anchor.xpath}/${relativePath}`;
       if (isUniqueXPath(xpath)) return xpath;
     }
 
+    // 8c: Anchor + simple descendant tag
     const descXpath = `${anchor.xpath}//${tag}`;
     if (isUniqueXPath(descXpath)) return descXpath;
   }
@@ -454,13 +562,21 @@ function getOptimizedXPathV2(element) {
     }
   }
 
+  // Priority 9c: Unstable-but-unique ID (better than deep structural path)
+  if (element.id && !isStableId(element.id)) {
+    const escaped = CSS.escape(element.id);
+    if (_activeDoc.querySelectorAll(`#${escaped}`).length === 1) {
+      return `//*[@id=${escapeXPathString(element.id)}]`;
+    }
+  }
+
   // Priority 10: Full structural fallback
   return getStructuralXPath(element);
 }
 
 function generateAlternativeXPathsV2(element) {
   const alternatives = [];
-  const tag = element.tagName.toLowerCase();
+  const tag = xpathTag(element);
 
   // Alt 1: By aria-label
   const ariaLabel = element.getAttribute("aria-label");
@@ -785,7 +901,7 @@ function buildPeekContext(element, iframeEl) {
   return { frame, shadow };
 }
 
-function gatherSelectionData(element, iframeEl) {
+function gatherSelectionData(element, iframeEl, includeDomTree = false) {
   const context = iframeEl
     ? buildPeekContext(element, iframeEl)
     : buildContext(element);
@@ -794,7 +910,11 @@ function gatherSelectionData(element, iframeEl) {
 
   const generate = () => {
     const xpaths = generateXPathOptions(element);
-    return { xpaths, context, elementInfo };
+    const result = { xpaths, context, elementInfo };
+    if (includeDomTree) {
+      result.domTree = buildDomTree(element);
+    }
+    return result;
   };
 
   // If the element is from a different document (iframe peek-through),
@@ -837,6 +957,13 @@ const WRAPPER_TAGS = new Set([
 const FORM_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA", "BUTTON"]);
 
 function resolveSmartTarget(element) {
+  // SVG child elements (path, circle, rect, etc.) → select the parent <svg>.
+  // For inline SVG in HTML, tagName is lowercase so "svg" comparison is correct.
+  if (element instanceof SVGElement && element.tagName !== "svg") {
+    const svg = element.closest("svg");
+    if (svg) return svg;
+  }
+
   if (SEMANTIC_TARGETS.has(element.tagName)) return element;
 
   const role = element.getAttribute("role");
@@ -863,6 +990,178 @@ function resolveSmartTarget(element) {
   return element;
 }
 
+// ── DOM Context Tree ──────────────────────────────────────────────
+// Builds a serialized DOM tree around the locked element for the side panel.
+// Captures ancestors up to a significant boundary, all siblings at each level,
+// and children several levels deep. The side panel renders this with
+// expand/collapse controls.
+
+const CONTEXT_BOUNDARY_TAGS = new Set([
+  "FORM", "NAV", "SECTION", "ARTICLE", "ASIDE", "MAIN", "HEADER", "FOOTER",
+  "UL", "OL", "TABLE", "THEAD", "TBODY", "TR", "DL", "FIELDSET", "DIALOG",
+  "FIGURE",
+]);
+
+const SIGNIFICANT_ATTRS = ["data-testid", "data-test", "data-cy", "data-qa", "data-automation"];
+
+function isSignificantNode(el) {
+  if (el.id) return true;
+  if (el.getAttribute("role")) return true;
+  if (SEMANTIC_TARGETS.has(el.tagName) || CONTEXT_BOUNDARY_TAGS.has(el.tagName)) return true;
+  if (el.tagName.includes("-")) return true;
+  if (el.shadowRoot) return true;
+  if (WRAPPER_TAGS.has(el.tagName) && SIGNIFICANT_ATTRS.some(a => el.hasAttribute(a))) return true;
+  return !WRAPPER_TAGS.has(el.tagName);
+}
+
+// Returns { root, defaultDepth } — root is always body (or as high as we can go),
+// defaultDepth is the suggested initial display depth (ancestor index from root).
+function findTreeRoot(element) {
+  const doc = element.ownerDocument || document;
+  const ancestors = [];
+  let current = element.parentElement;
+
+  // Collect all ancestors up to body
+  while (current && current !== doc.documentElement) {
+    ancestors.unshift(current);
+    if (current === doc.body) break;
+    current = current.parentElement;
+  }
+
+  if (ancestors.length === 0) return { root: element, defaultDepth: 0 };
+
+  // Calculate smart default: find the best "default root" to show initially.
+  // Walk from element upward, find the first significant ancestor that provides
+  // good context, then go 1 more level above it.
+  const root = ancestors[0]; // always use the topmost (body or highest reachable)
+  let defaultDepth = 0; // index into ancestors array (0 = show from root/body)
+
+  const MAX_WRAPPER_RUN = 5; // cap consecutive insignificant wrappers
+  let wrapperRun = 0;
+
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const el = ancestors[i];
+    // For table elements, always include TABLE (not just TBODY/TR)
+    if (el.tagName === "TABLE") {
+      // Go 1 above TABLE if possible
+      defaultDepth = Math.max(0, i - 1);
+      break;
+    }
+    if (isSignificantNode(el)) {
+      // Go 1 above this significant node if possible
+      defaultDepth = Math.max(0, i - 1);
+      break;
+    }
+    // Safety net: if we pass too many consecutive insignificant wrappers,
+    // treat the current position as the boundary
+    wrapperRun++;
+    if (wrapperRun >= MAX_WRAPPER_RUN) {
+      defaultDepth = Math.max(0, i);
+      break;
+    }
+  }
+
+  return { root, defaultDepth };
+}
+
+const TREE_ATTR_PICKS = ["role", "data-testid", "data-test", "data-cy", "data-qa",
+  "data-automation", "aria-label", "name", "type", "href", "placeholder",
+  "src", "alt", "for", "action", "method", "value"];
+
+function serializeNode(el, isTarget) {
+  const classes = [];
+  if (el.className && typeof el.className === "string") {
+    el.className.split(/\s+/).filter(Boolean).slice(0, 4).forEach(c => classes.push(c));
+  }
+
+  const attrs = {};
+  let attrCount = 0;
+  for (const key of TREE_ATTR_PICKS) {
+    if (attrCount >= 4) break;
+    const val = el.getAttribute(key);
+    if (val) {
+      attrs[key] = val;
+      attrCount++;
+    }
+  }
+
+  let text = "";
+  for (const child of el.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const t = child.textContent.trim();
+      if (t) { text = t.length > 40 ? t.substring(0, 40) + "\u2026" : t; break; }
+    }
+  }
+
+  return {
+    tag: el.tagName.toLowerCase(),
+    id: el.id || "",
+    classes,
+    attrs,
+    text,
+    childCount: el.children.length,
+    isTarget: !!isTarget,
+    children: [],
+  };
+}
+
+function serializeSubtree(el, maxDepth, currentDepth, path) {
+  const node = serializeNode(el, false);
+  node._path = path;
+  if (currentDepth < maxDepth && el.children.length > 0) {
+    const kids = Array.from(el.children);
+    node.children = kids.map((k, idx) => serializeSubtree(k, maxDepth, currentDepth + 1, [...path, idx]));
+  }
+  return node;
+}
+
+function buildDomTree(element) {
+  const { root, defaultDepth } = findTreeRoot(element);
+  lastDomTreeRoot = root;
+
+  // Build ancestor chain from root down to element
+  const chain = [];
+  let cur = element;
+  while (cur && cur !== root.parentElement) {
+    chain.unshift(cur);
+    cur = cur.parentElement;
+  }
+
+  // Recursive builder
+  function build(node, depth, path) {
+    const isOnPath = chain.includes(node);
+    const isTarget = node === element;
+    const treeNode = serializeNode(node, isTarget);
+    treeNode._path = path;
+
+    if (isTarget) {
+      // Serialize children of locked element 3 levels deep
+      if (node.children.length > 0) {
+        treeNode.children = Array.from(node.children)
+          .map((k, idx) => serializeSubtree(k, 3, 1, [...path, idx]));
+      }
+    } else if (isOnPath) {
+      // Show ALL siblings at this level, recurse into the one on the path
+      const pathChild = chain[depth + 1];
+      if (pathChild) {
+        treeNode.children = Array.from(node.children).map((child, idx) => {
+          if (child === pathChild) return build(child, depth + 1, [...path, idx]);
+          // Off-path siblings: serialize 1 level of children so they're expandable
+          return serializeSubtree(child, 1, 0, [...path, idx]);
+        });
+      }
+    }
+
+    return treeNode;
+  }
+
+  const tree = build(root, 0, []);
+  // Attach metadata for the side panel zoom controls
+  tree._defaultDepth = defaultDepth;
+  tree._totalDepth = chain.length;
+  return tree;
+}
+
 // Active document context for XPath generation.
 // Defaults to the current frame's document but is temporarily switched
 // when inspecting elements inside an iframe via peek-through overlays.
@@ -883,9 +1182,13 @@ let highlightedElement = null;
 let lastElement = null;
 let lastIframeEl = null;
 let throttleTimeout = null;
+let clearDebounceTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
 let lockedElement = null;
+let lastContextMenuTarget = null;
+let lastContextMenuIframe = null;
+let lastDomTreeRoot = null;
 let lockedIframeEl = null;
 let isLocked = false;
 let isPanelOpen = false;
@@ -903,10 +1206,20 @@ const iframeLoadListened = new WeakSet();
 function cleanup() {
   isExtensionValid = false;
   removeHighlight();
+  if (highlightedElement) {
+    try { highlightedElement.hidePopover(); } catch (e) { /* ignore */ }
+    highlightedElement.remove();
+    highlightedElement = null;
+  }
 
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
     throttleTimeout = null;
+  }
+
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
+    clearDebounceTimeout = null;
   }
 
   if (_repositionRafId !== null) {
@@ -924,30 +1237,36 @@ function cleanup() {
 
 function attachHoverListeners() {
   if (listenersAttached) return;
-  document.addEventListener("mouseover", handleMouseOver, { passive: true });
-  document.addEventListener("mouseout", handleMouseOut, { passive: true });
-  document.addEventListener("click", handleClick, { passive: false });
+  // Use capture phase so events are seen before any intermediate handler
+  // calls stopPropagation() (e.g. Jira / Atlassian UI frameworks).
+  document.addEventListener("mouseover", handleMouseOver, { passive: true, capture: true });
+  document.addEventListener("mouseout", handleMouseOut, { passive: true, capture: true });
+  document.addEventListener("click", handleClick, { passive: false, capture: true });
   document.addEventListener("keydown", handleKeyDown, { passive: false });
   listenersAttached = true;
 
   createIframeOverlays();
   startIframeObserver();
   window.addEventListener("scroll", repositionAllIframeOverlays, { passive: true });
+  window.addEventListener("scroll", repositionLockedHighlight, { passive: true });
   window.addEventListener("resize", repositionAllIframeOverlays, { passive: true });
+  window.addEventListener("resize", repositionLockedHighlight, { passive: true });
 }
 
 function detachHoverListeners() {
   if (!listenersAttached) return;
-  document.removeEventListener("mouseover", handleMouseOver);
-  document.removeEventListener("mouseout", handleMouseOut);
-  document.removeEventListener("click", handleClick);
+  document.removeEventListener("mouseover", handleMouseOver, { capture: true });
+  document.removeEventListener("mouseout", handleMouseOut, { capture: true });
+  document.removeEventListener("click", handleClick, { capture: true });
   document.removeEventListener("keydown", handleKeyDown);
   listenersAttached = false;
 
   removeIframeOverlays();
   stopIframeObserver();
   window.removeEventListener("scroll", repositionAllIframeOverlays);
+  window.removeEventListener("scroll", repositionLockedHighlight);
   window.removeEventListener("resize", repositionAllIframeOverlays);
+  window.removeEventListener("resize", repositionLockedHighlight);
 
   if (_repositionRafId !== null) {
     cancelAnimationFrame(_repositionRafId);
@@ -955,19 +1274,41 @@ function detachHoverListeners() {
   }
 }
 
+// Check if an element is inside a top-layer popover or dialog.
+// Elements in the top layer render above the entire document regardless
+// of z-index, so the highlight overlay must also be in the top layer
+// (and re-promoted to stack above the target's layer).
+function isInTopLayer(element) {
+  let current = element;
+  while (current && current !== document.documentElement) {
+    try {
+      if (current.matches(":popover-open")) return true;
+    } catch (e) { /* :popover-open not supported — fall through */ }
+    if (current.tagName === "DIALOG" && current.open) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
 function createHighlightOverlay() {
   const overlay = document.createElement("div");
   overlay.id = "pathfinder-x-highlight";
+  overlay.setAttribute("popover", "manual");
   overlay.style.cssText = `
-    position: absolute;
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    padding: 0;
     background: rgba(255, 0, 0, 0.3);
     border: 2px solid #ff0000;
     pointer-events: none;
-    z-index: 999999;
+    z-index: 2147483647;
     box-sizing: border-box;
     transition: all 0.1s ease;
+    overflow: visible;
   `;
-  document.body.appendChild(overlay);
+  document.documentElement.appendChild(overlay);
+  try { overlay.showPopover(); } catch (e) { /* Popover API unavailable */ }
   return overlay;
 }
 
@@ -988,14 +1329,24 @@ function updateHighlightStyle(locked = false) {
 function highlightElement(element) {
   if (!highlightedElement) {
     highlightedElement = createHighlightOverlay();
+  } else {
+    // Re-enter the top layer if the overlay was hidden via removeHighlight()
+    try { highlightedElement.showPopover(); } catch (e) { /* already shown or unavailable */ }
+  }
+
+  // If the target lives inside a top-layer popover/dialog, re-promote
+  // our overlay so it stacks above that layer.
+  if (isInTopLayer(element)) {
+    try {
+      highlightedElement.hidePopover();
+      highlightedElement.showPopover();
+    } catch (e) { /* Popover API unavailable */ }
   }
 
   const rect = element.getBoundingClientRect();
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
 
-  highlightedElement.style.top = rect.top + scrollTop + "px";
-  highlightedElement.style.left = rect.left + scrollLeft + "px";
+  highlightedElement.style.top = rect.top + "px";
+  highlightedElement.style.left = rect.left + "px";
   highlightedElement.style.width = rect.width + "px";
   highlightedElement.style.height = rect.height + "px";
   highlightedElement.style.display = "block";
@@ -1003,6 +1354,8 @@ function highlightElement(element) {
 
 function removeHighlight() {
   if (highlightedElement) {
+    // Hide visually but keep in DOM so it can be reused on the next hover
+    // without the cost of creating/appending a new element every time.
     highlightedElement.style.display = "none";
   }
 }
@@ -1074,6 +1427,16 @@ function createIframeOverlays() {
     overlay.addEventListener("mousemove", (e) => handleIframeMouseMove(e, iframe));
     overlay.addEventListener("click", (e) => handleIframeClick(e, iframe));
     overlay.addEventListener("mouseleave", (e) => handleIframeMouseLeave(e, iframe));
+    overlay.addEventListener("contextmenu", (e) => {
+      e.stopPropagation();
+      const coords = getIframeRelativeCoords(e, iframe);
+      const iframeDoc = iframe.contentDocument;
+      if (!iframeDoc) return;
+      const rawElement = iframeDoc.elementFromPoint(coords.x, coords.y);
+      if (!rawElement) return;
+      lastContextMenuTarget = resolveSmartTarget(rawElement);
+      lastContextMenuIframe = iframe;
+    });
 
     iframeOverlays.push({ overlay, iframe });
   });
@@ -1084,6 +1447,15 @@ function removeIframeOverlays() {
     overlay.remove();
   });
   iframeOverlays = [];
+}
+
+function repositionLockedHighlight() {
+  if (!isLocked || !lockedElement || !lockedElement.isConnected || !highlightedElement) return;
+  if (lockedIframeEl && lockedIframeEl.isConnected) {
+    highlightElementInIframe(lockedElement, lockedIframeEl);
+  } else {
+    highlightElement(lockedElement);
+  }
 }
 
 function repositionAllIframeOverlays() {
@@ -1133,6 +1505,8 @@ function getIframeRelativeCoords(event, iframe) {
 function highlightElementInIframe(element, iframe) {
   if (!highlightedElement) {
     highlightedElement = createHighlightOverlay();
+  } else {
+    try { highlightedElement.showPopover(); } catch (e) { /* already shown or unavailable */ }
   }
 
   const elemRect = element.getBoundingClientRect();
@@ -1145,15 +1519,12 @@ function highlightElementInIframe(element, iframe) {
   const paddingLeft = parseFloat(style.paddingLeft) || 0;
   const paddingTop = parseFloat(style.paddingTop) || 0;
 
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-
   // elemRect is in the iframe's internal (layout) space.
   // Scale border/padding/element offsets to the parent's visual space.
   highlightedElement.style.top =
-    (iframeRect.top + (borderTop + paddingTop + elemRect.top) * scale.y + scrollTop) + "px";
+    (iframeRect.top + (borderTop + paddingTop + elemRect.top) * scale.y) + "px";
   highlightedElement.style.left =
-    (iframeRect.left + (borderLeft + paddingLeft + elemRect.left) * scale.x + scrollLeft) + "px";
+    (iframeRect.left + (borderLeft + paddingLeft + elemRect.left) * scale.x) + "px";
   highlightedElement.style.width = (elemRect.width * scale.x) + "px";
   highlightedElement.style.height = (elemRect.height * scale.y) + "px";
   highlightedElement.style.display = "block";
@@ -1185,6 +1556,10 @@ function handleIframeMouseMove(event, iframe) {
 
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
+  }
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
+    clearDebounceTimeout = null;
   }
 
   highlightElementInIframe(element, iframe);
@@ -1241,13 +1616,19 @@ function handleIframeMouseLeave(event, iframe) {
     throttleTimeout = null;
   }
 
-  try {
-    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch (error) {
-    // Extension context may have been invalidated
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
   }
+  clearDebounceTimeout = setTimeout(() => {
+    clearDebounceTimeout = null;
+    try {
+      chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (error) {
+      // Extension context may have been invalidated
+    }
+  }, 60);
 }
 
 function lockElementInIframe(element, iframe) {
@@ -1261,7 +1642,7 @@ function lockElementInIframe(element, iframe) {
   highlightElementInIframe(lockedElement, iframe);
   updateHighlightStyle(true);
 
-  const payload = gatherSelectionData(lockedElement, iframe);
+  const payload = gatherSelectionData(lockedElement, iframe, true);
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
     isLocked = false;
     lockedElement = null;
@@ -1363,6 +1744,10 @@ function handleMouseOver(event) {
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
   }
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
+    clearDebounceTimeout = null;
+  }
 
   highlightElement(element);
   updateHighlightStyle(false);
@@ -1421,13 +1806,21 @@ function handleMouseOut(event) {
     throttleTimeout = null;
   }
 
-  try {
-    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch (error) {
-    // Extension context may have been invalidated
+  // Debounce the clear so a subsequent mouseover can cancel it,
+  // preventing flicker between the zero state and the new element.
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
   }
+  clearDebounceTimeout = setTimeout(() => {
+    clearDebounceTimeout = null;
+    try {
+      chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (error) {
+      // Extension context may have been invalidated
+    }
+  }, 60);
 }
 
 function handleClick(event) {
@@ -1474,7 +1867,7 @@ function lockElement(element) {
   highlightElement(lockedElement);
   updateHighlightStyle(true);
 
-  const payload = gatherSelectionData(lockedElement);
+  const payload = gatherSelectionData(lockedElement, null, true);
 
   if (!payload || !payload.xpaths || payload.xpaths.length === 0) {
     isLocked = false;
@@ -1532,6 +1925,7 @@ function unlockElement() {
   isLocked = false;
   lockedElement = null;
   lockedIframeEl = null;
+  lastDomTreeRoot = null;
   lastElement = null;
   removeHighlight();
 
@@ -1590,12 +1984,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     sendResponse({ success: true });
+  } else if (message.type === "CONTEXT_MENU_XPATH") {
+    if (!lastContextMenuTarget || !lastContextMenuTarget.isConnected) {
+      sendResponse({ success: false });
+      return;
+    }
+    const target = lastContextMenuTarget;
+    const iframeEl = lastContextMenuIframe;
+    // Defer lock until the side panel has opened and the viewport has
+    // settled — locking immediately would position the highlight at
+    // pre-resize coordinates. Also guards against the side panel init
+    // sending DISABLE_HOVER which would clear the lock.
+    setTimeout(() => {
+      if (!target.isConnected) return;
+      isPanelOpen = true;
+      attachHoverListeners();
+      if (isLocked) unlockElement();
+      if (iframeEl && iframeEl.isConnected) {
+        lockElementInIframe(target, iframeEl);
+      } else {
+        lockElement(target);
+      }
+    }, 200);
+    lastContextMenuTarget = null;
+    lastContextMenuIframe = null;
+    sendResponse({ success: true });
+  } else if (message.type === "SELECT_TREE_NODE") {
+    if (!lastDomTreeRoot || !lastDomTreeRoot.isConnected || !Array.isArray(message.path)) {
+      sendResponse({ success: false });
+      return;
+    }
+    let target = lastDomTreeRoot;
+    for (const idx of message.path) {
+      if (!target.children || !target.children[idx]) {
+        sendResponse({ success: false });
+        return;
+      }
+      target = target.children[idx];
+    }
+    // Preserve the iframe reference before unlocking clears it
+    const prevIframe = lockedIframeEl;
+    if (isLocked) unlockElement();
+
+    // If the target lives in an iframe document, use iframe-aware locking
+    // so the highlight is positioned correctly in the parent viewport.
+    const targetDoc = target.ownerDocument;
+    if (prevIframe && prevIframe.isConnected && targetDoc && targetDoc !== document) {
+      lockElementInIframe(target, prevIframe);
+    } else {
+      lockElement(target);
+    }
+    sendResponse({ success: true });
   } else if (message.type === "PANEL_CLOSED") {
     isPanelOpen = false;
     hoverEnabled = false;
-    if (isLocked) {
-      unlockElement();
-    }
+    // Soft cleanup: remove visuals but preserve lock state in memory
+    // so the side panel can restore it from storage on reopen.
     removeHighlight();
     lastElement = null;
     detachHoverListeners();
@@ -1652,6 +2096,12 @@ if (initializeContentScript()) {
     window.addEventListener("beforeunload", handleUnload);
     window.addEventListener("unload", handleUnload);
   }
+
+  // Capture right-clicked element for context menu "Get XPath"
+  document.addEventListener("contextmenu", (event) => {
+    lastContextMenuTarget = resolveSmartTarget(event.target);
+    lastContextMenuIframe = null;
+  }, { passive: true, capture: true });
 
   // Check extension context lazily — only when interaction is happening
   // instead of polling every 5 seconds on every page

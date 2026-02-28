@@ -18,8 +18,6 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "sidepanel") return;
 
   port.onDisconnect.addListener(() => {
-    const tabIdFromPort = port.sender?.tab?.id;
-
     function sendPanelClosed(tabId) {
       chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
         if (chrome.runtime.lastError || !frames) return;
@@ -35,16 +33,14 @@ chrome.runtime.onConnect.addListener((port) => {
       });
     }
 
-    if (typeof tabIdFromPort === "number") {
-      sendPanelClosed(tabIdFromPort);
-    } else {
-      // Fallback: best-effort cleanup using active tab if sender.tab is unavailable
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const tab = tabs?.[0];
-        if (!tab?.id) return;
-        sendPanelClosed(tab.id);
-      });
-    }
+    // Broadcast PANEL_CLOSED to ALL tabs so every content script
+    // can clean up its visual state (highlights, hover listeners).
+    chrome.tabs.query({}, (tabs) => {
+      if (chrome.runtime.lastError || !tabs) return;
+      for (const tab of tabs) {
+        if (tab.id) sendPanelClosed(tab.id);
+      }
+    });
   });
 });
 
@@ -167,5 +163,11 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "pathfinder-xpath") {
     chrome.sidePanel.open({ tabId: tab.id });
+    chrome.tabs.sendMessage(
+      tab.id,
+      { type: "CONTEXT_MENU_XPATH" },
+      { frameId: info.frameId },
+      () => void chrome.runtime.lastError
+    );
   }
 });
