@@ -271,6 +271,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       content.appendChild(i18nBadge);
     }
 
+    if (option.dynamicId) {
+      const dynamicBadge = document.createElement("div");
+      dynamicBadge.className = "validation dynamic-id-warning";
+      dynamicBadge.textContent = "dynamic ID";
+      dynamicBadge.title = "This ID appears auto-generated and may change";
+      content.appendChild(dynamicBadge);
+    }
+
     // Return both the DOM element and refs for batch validation
     return { element: optionDiv, validation, option };
   }
@@ -412,11 +420,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // ── DOM Context Tree ──────────────────────────────────────────────
 
-  function truncateStr(str, max) {
-    if (!str || str.length <= max) return str;
-    return str.substring(0, max) + "\u2026";
-  }
-
   function hasExpandableChildren(node) {
     return node.children && node.children.length > 0;
   }
@@ -455,7 +458,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const line = document.createElement("div");
     line.className = "dom-tree-line" + (node.isTarget ? " dom-tree-target" : "");
-    line.style.paddingLeft = (depth * 16 + 8) + "px";
+    line.style.setProperty("--tree-indent", (depth * 16 + 8) + "px");
 
     const expandable = hasExpandableChildren(node);
     let childrenContainer = null;
@@ -505,7 +508,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       for (const [key, val] of Object.entries(node.attrs)) {
         const attr = document.createElement("span");
         attr.className = "dom-tree-attr";
-        attr.textContent = ` ${key}="${truncateStr(val, 25)}"`;
+        attr.textContent = ` ${key}="${val}"`;
         line.appendChild(attr);
       }
     }
@@ -563,7 +566,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Closing tag line
       const closingLine = document.createElement("div");
       closingLine.className = "dom-tree-line dom-tree-closing";
-      closingLine.style.paddingLeft = (depth * 16 + 8) + "px";
+      closingLine.style.setProperty("--tree-indent", (depth * 16 + 8) + "px");
       const closingArrowSpacer = document.createElement("span");
       closingArrowSpacer.className = "dom-tree-arrow";
       closingArrowSpacer.textContent = " ";
@@ -690,6 +693,16 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
           currentZoomDepth = depth;
           renderTreeFromZoom();
+        }
+      });
+    }
+
+    // "Select element" — for any node that isn't the current target
+    if (!node.isTarget && node._path) {
+      items.push({
+        label: "Select element",
+        action: () => {
+          sendMessageToAllFrames({ type: "SELECT_TREE_NODE", path: node._path });
         }
       });
     }
@@ -1003,11 +1016,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       clearDisplay();
 
       await ensureContentScriptInjected();
+
+      // Always notify content script that the panel is open so it can
+      // re-highlight locked elements, regardless of hover preference.
+      await sendMessageToAllFrames({ type: "PANEL_OPENED" });
+
       const result = await chrome.storage.local.get("isHoveringEnabled");
       const isHoveringEnabled =
         !result || result.isHoveringEnabled !== false;
       if (isHoveringEnabled) {
-        await sendMessageToAllFrames({ type: "PANEL_OPENED" });
         await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
       }
 

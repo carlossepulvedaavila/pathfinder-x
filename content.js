@@ -216,7 +216,10 @@ function generateXPathOptions(element) {
     }
 
     const filtered = filterUniqueOptions(options);
-    filtered.forEach(opt => { opt.i18nSafe = isI18nSafeXPath(opt.xpath); });
+    filtered.forEach(opt => {
+      opt.i18nSafe = isI18nSafeXPath(opt.xpath);
+      opt.dynamicId = hasDynamicId(opt.xpath);
+    });
 
     if (filtered.length > 5) {
       const shadowOption = filtered.find((opt) => opt.strategy === "shadow");
@@ -269,6 +272,12 @@ const DYNAMIC_ID_PATTERNS = [
 function isStableId(id) {
   if (!id || id.length < 2) return false;
   return !DYNAMIC_ID_PATTERNS.some(pattern => pattern.test(id));
+}
+
+function hasDynamicId(xpath) {
+  const match = xpath.match(/@id\s*=\s*(['"])(.+?)\1/);
+  if (!match) return false;
+  return !isStableId(match[2]);
 }
 
 const TEST_ATTRIBUTES_V2 = [
@@ -491,12 +500,28 @@ function getOptimizedXPathV2(element) {
   // Priority 8: Scoped structural with stable anchor
   const anchor = findStableAnchor(element);
   if (anchor) {
+    // 8a: Anchor + attribute-qualified descendant (e.g. anchor//*[@data-testid="x"])
+    for (const attr of TEST_ATTRIBUTES_V2) {
+      const val = element.getAttribute(attr);
+      if (val) {
+        const xpath = `${anchor.xpath}//*[@${attr}=${escapeXPathString(val)}]`;
+        if (isUniqueXPath(xpath)) return xpath;
+      }
+    }
+
+    for (const attr of presentAttrs) {
+      const xpath = `${anchor.xpath}//${tag}[@${attr.name}=${escapeXPathString(attr.value)}]`;
+      if (isUniqueXPath(xpath)) return xpath;
+    }
+
+    // 8b: Anchor + structural relative path
     const relativePath = buildRelativePath(anchor.element, element);
     if (relativePath) {
       const xpath = `${anchor.xpath}/${relativePath}`;
       if (isUniqueXPath(xpath)) return xpath;
     }
 
+    // 8c: Anchor + simple descendant tag
     const descXpath = `${anchor.xpath}//${tag}`;
     if (isUniqueXPath(descXpath)) return descXpath;
   }
@@ -531,6 +556,14 @@ function getOptimizedXPathV2(element) {
         const xpath = `//label[normalize-space(.)=${escapeXPathString(labelText)}]/following::${tag}[1]`;
         if (isUniqueXPath(xpath)) return xpath;
       }
+    }
+  }
+
+  // Priority 9c: Unstable-but-unique ID (better than deep structural path)
+  if (element.id && !isStableId(element.id)) {
+    const escaped = CSS.escape(element.id);
+    if (_activeDoc.querySelectorAll(`#${escaped}`).length === 1) {
+      return `//*[@id=${escapeXPathString(element.id)}]`;
     }
   }
 
@@ -965,12 +998,15 @@ const CONTEXT_BOUNDARY_TAGS = new Set([
   "FIGURE",
 ]);
 
+const SIGNIFICANT_ATTRS = ["data-testid", "data-test", "data-cy", "data-qa", "data-automation"];
+
 function isSignificantNode(el) {
   if (el.id) return true;
   if (el.getAttribute("role")) return true;
   if (SEMANTIC_TARGETS.has(el.tagName) || CONTEXT_BOUNDARY_TAGS.has(el.tagName)) return true;
   if (el.tagName.includes("-")) return true;
   if (el.shadowRoot) return true;
+  if (WRAPPER_TAGS.has(el.tagName) && SIGNIFICANT_ATTRS.some(a => el.hasAttribute(a))) return true;
   return !WRAPPER_TAGS.has(el.tagName);
 }
 
@@ -996,6 +1032,9 @@ function findTreeRoot(element) {
   const root = ancestors[0]; // always use the topmost (body or highest reachable)
   let defaultDepth = 0; // index into ancestors array (0 = show from root/body)
 
+  const MAX_WRAPPER_RUN = 5; // cap consecutive insignificant wrappers
+  let wrapperRun = 0;
+
   for (let i = ancestors.length - 1; i >= 0; i--) {
     const el = ancestors[i];
     // For table elements, always include TABLE (not just TBODY/TR)
@@ -1007,6 +1046,13 @@ function findTreeRoot(element) {
     if (isSignificantNode(el)) {
       // Go 1 above this significant node if possible
       defaultDepth = Math.max(0, i - 1);
+      break;
+    }
+    // Safety net: if we pass too many consecutive insignificant wrappers,
+    // treat the current position as the boundary
+    wrapperRun++;
+    if (wrapperRun >= MAX_WRAPPER_RUN) {
+      defaultDepth = Math.max(0, i);
       break;
     }
   }
@@ -1030,7 +1076,7 @@ function serializeNode(el, isTarget) {
     if (attrCount >= 4) break;
     const val = el.getAttribute(key);
     if (val) {
-      attrs[key] = val.length > 50 ? val.substring(0, 50) + "\u2026" : val;
+      attrs[key] = val;
       attrCount++;
     }
   }
@@ -1055,17 +1101,19 @@ function serializeNode(el, isTarget) {
   };
 }
 
-function serializeSubtree(el, maxDepth, currentDepth) {
+function serializeSubtree(el, maxDepth, currentDepth, path) {
   const node = serializeNode(el, false);
+  node._path = path;
   if (currentDepth < maxDepth && el.children.length > 0) {
     const kids = Array.from(el.children);
-    node.children = kids.map(k => serializeSubtree(k, maxDepth, currentDepth + 1));
+    node.children = kids.map((k, idx) => serializeSubtree(k, maxDepth, currentDepth + 1, [...path, idx]));
   }
   return node;
 }
 
 function buildDomTree(element) {
   const { root, defaultDepth } = findTreeRoot(element);
+  lastDomTreeRoot = root;
 
   // Build ancestor chain from root down to element
   const chain = [];
@@ -1076,25 +1124,26 @@ function buildDomTree(element) {
   }
 
   // Recursive builder
-  function build(node, depth) {
+  function build(node, depth, path) {
     const isOnPath = chain.includes(node);
     const isTarget = node === element;
     const treeNode = serializeNode(node, isTarget);
+    treeNode._path = path;
 
     if (isTarget) {
       // Serialize children of locked element 3 levels deep
       if (node.children.length > 0) {
         treeNode.children = Array.from(node.children)
-          .map(k => serializeSubtree(k, 3, 1));
+          .map((k, idx) => serializeSubtree(k, 3, 1, [...path, idx]));
       }
     } else if (isOnPath) {
       // Show ALL siblings at this level, recurse into the one on the path
       const pathChild = chain[depth + 1];
       if (pathChild) {
-        treeNode.children = Array.from(node.children).map(child => {
-          if (child === pathChild) return build(child, depth + 1);
+        treeNode.children = Array.from(node.children).map((child, idx) => {
+          if (child === pathChild) return build(child, depth + 1, [...path, idx]);
           // Off-path siblings: serialize 1 level of children so they're expandable
-          return serializeSubtree(child, 1, 0);
+          return serializeSubtree(child, 1, 0, [...path, idx]);
         });
       }
     }
@@ -1102,7 +1151,7 @@ function buildDomTree(element) {
     return treeNode;
   }
 
-  const tree = build(root, 0);
+  const tree = build(root, 0, []);
   // Attach metadata for the side panel zoom controls
   tree._defaultDepth = defaultDepth;
   tree._totalDepth = chain.length;
@@ -1129,9 +1178,12 @@ let highlightedElement = null;
 let lastElement = null;
 let lastIframeEl = null;
 let throttleTimeout = null;
+let clearDebounceTimeout = null;
 let isExtensionValid = true;
 let contextCheckInterval = null;
 let lockedElement = null;
+let lastContextMenuTarget = null;
+let lastDomTreeRoot = null;
 let lockedIframeEl = null;
 let isLocked = false;
 let isPanelOpen = false;
@@ -1153,6 +1205,11 @@ function cleanup() {
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
     throttleTimeout = null;
+  }
+
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
+    clearDebounceTimeout = null;
   }
 
   if (_repositionRafId !== null) {
@@ -1180,6 +1237,7 @@ function attachHoverListeners() {
   startIframeObserver();
   window.addEventListener("scroll", repositionAllIframeOverlays, { passive: true });
   window.addEventListener("resize", repositionAllIframeOverlays, { passive: true });
+  window.addEventListener("resize", repositionLockedHighlight, { passive: true });
 }
 
 function detachHoverListeners() {
@@ -1194,6 +1252,7 @@ function detachHoverListeners() {
   stopIframeObserver();
   window.removeEventListener("scroll", repositionAllIframeOverlays);
   window.removeEventListener("resize", repositionAllIframeOverlays);
+  window.removeEventListener("resize", repositionLockedHighlight);
 
   if (_repositionRafId !== null) {
     cancelAnimationFrame(_repositionRafId);
@@ -1333,6 +1392,15 @@ function removeIframeOverlays() {
   iframeOverlays = [];
 }
 
+function repositionLockedHighlight() {
+  if (!isLocked || !lockedElement || !lockedElement.isConnected || !highlightedElement) return;
+  if (lockedIframeEl && lockedIframeEl.isConnected) {
+    highlightElementInIframe(lockedElement, lockedIframeEl);
+  } else {
+    highlightElement(lockedElement);
+  }
+}
+
 function repositionAllIframeOverlays() {
   if (_repositionRafId !== null) return;
   _repositionRafId = requestAnimationFrame(() => {
@@ -1433,6 +1501,10 @@ function handleIframeMouseMove(event, iframe) {
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
   }
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
+    clearDebounceTimeout = null;
+  }
 
   highlightElementInIframe(element, iframe);
   updateHighlightStyle(false);
@@ -1488,13 +1560,19 @@ function handleIframeMouseLeave(event, iframe) {
     throttleTimeout = null;
   }
 
-  try {
-    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch (error) {
-    // Extension context may have been invalidated
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
   }
+  clearDebounceTimeout = setTimeout(() => {
+    clearDebounceTimeout = null;
+    try {
+      chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (error) {
+      // Extension context may have been invalidated
+    }
+  }, 60);
 }
 
 function lockElementInIframe(element, iframe) {
@@ -1610,6 +1688,10 @@ function handleMouseOver(event) {
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
   }
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
+    clearDebounceTimeout = null;
+  }
 
   highlightElement(element);
   updateHighlightStyle(false);
@@ -1668,13 +1750,21 @@ function handleMouseOut(event) {
     throttleTimeout = null;
   }
 
-  try {
-    chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
-      void chrome.runtime.lastError;
-    });
-  } catch (error) {
-    // Extension context may have been invalidated
+  // Debounce the clear so a subsequent mouseover can cancel it,
+  // preventing flicker between the zero state and the new element.
+  if (clearDebounceTimeout) {
+    clearTimeout(clearDebounceTimeout);
   }
+  clearDebounceTimeout = setTimeout(() => {
+    clearDebounceTimeout = null;
+    try {
+      chrome.runtime.sendMessage({ type: "XPATH_CLEAR" }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (error) {
+      // Extension context may have been invalidated
+    }
+  }, 60);
 }
 
 function handleClick(event) {
@@ -1779,6 +1869,7 @@ function unlockElement() {
   isLocked = false;
   lockedElement = null;
   lockedIframeEl = null;
+  lastDomTreeRoot = null;
   lastElement = null;
   removeHighlight();
 
@@ -1837,12 +1928,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     sendResponse({ success: true });
+  } else if (message.type === "CONTEXT_MENU_XPATH") {
+    if (!lastContextMenuTarget || !lastContextMenuTarget.isConnected) {
+      sendResponse({ success: false });
+      return;
+    }
+    const target = lastContextMenuTarget;
+    // Defer lock until the side panel has opened and the viewport has
+    // settled — locking immediately would position the highlight at
+    // pre-resize coordinates. Also guards against the side panel init
+    // sending DISABLE_HOVER which would clear the lock.
+    setTimeout(() => {
+      if (!target.isConnected) return;
+      isPanelOpen = true;
+      attachHoverListeners();
+      if (isLocked) unlockElement();
+      lockElement(target);
+    }, 200);
+    sendResponse({ success: true });
+  } else if (message.type === "SELECT_TREE_NODE") {
+    if (!lastDomTreeRoot || !lastDomTreeRoot.isConnected || !Array.isArray(message.path)) {
+      sendResponse({ success: false });
+      return;
+    }
+    let target = lastDomTreeRoot;
+    for (const idx of message.path) {
+      if (!target.children || !target.children[idx]) {
+        sendResponse({ success: false });
+        return;
+      }
+      target = target.children[idx];
+    }
+    // Preserve the iframe reference before unlocking clears it
+    const prevIframe = lockedIframeEl;
+    if (isLocked) unlockElement();
+
+    // If the target lives in an iframe document, use iframe-aware locking
+    // so the highlight is positioned correctly in the parent viewport.
+    const targetDoc = target.ownerDocument;
+    if (prevIframe && prevIframe.isConnected && targetDoc && targetDoc !== document) {
+      lockElementInIframe(target, prevIframe);
+    } else {
+      lockElement(target);
+    }
+    sendResponse({ success: true });
   } else if (message.type === "PANEL_CLOSED") {
     isPanelOpen = false;
     hoverEnabled = false;
-    if (isLocked) {
-      unlockElement();
-    }
+    // Soft cleanup: remove visuals but preserve lock state in memory
+    // so the side panel can restore it from storage on reopen.
     removeHighlight();
     lastElement = null;
     detachHoverListeners();
@@ -1899,6 +2033,11 @@ if (initializeContentScript()) {
     window.addEventListener("beforeunload", handleUnload);
     window.addEventListener("unload", handleUnload);
   }
+
+  // Capture right-clicked element for context menu "Get XPath"
+  document.addEventListener("contextmenu", (event) => {
+    lastContextMenuTarget = resolveSmartTarget(event.target);
+  }, { passive: true });
 
   // Check extension context lazily — only when interaction is happening
   // instead of polling every 5 seconds on every page

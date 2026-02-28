@@ -174,13 +174,16 @@ body {
 
 .dom-tree-node {
   user-select: text;
+  min-width: fit-content;
 }
 
 .dom-tree-line {
-  padding: 0 8px 0 0;
+  padding: 0 8px 0 var(--tree-indent, 8px);
   white-space: nowrap;
   cursor: default;
   border-left: 2px solid transparent;
+  min-width: 100%;
+  box-sizing: border-box;
 }
 
 .dom-tree-line:hover {
@@ -288,6 +291,9 @@ body {
 .dom-tree-wrap .dom-tree-line {
   white-space: normal;
   word-break: break-all;
+  text-indent: -14px;
+  padding-left: calc(var(--tree-indent) + 14px);
+  min-width: 0;
 }
 
 .dom-tree-context-menu {
@@ -439,6 +445,13 @@ body {
 .validation.i18n-warning {
   background-color: #e3f2fd;
   color: #1565c0;
+  cursor: help;
+  margin-left: 6px;
+}
+
+.validation.dynamic-id-warning {
+  background-color: #fff3e0;
+  color: #e65100;
   cursor: help;
   margin-left: 6px;
 }
