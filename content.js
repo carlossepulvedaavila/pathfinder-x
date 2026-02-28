@@ -1236,6 +1236,7 @@ function attachHoverListeners() {
   createIframeOverlays();
   startIframeObserver();
   window.addEventListener("scroll", repositionAllIframeOverlays, { passive: true });
+  window.addEventListener("scroll", repositionLockedHighlight, { passive: true });
   window.addEventListener("resize", repositionAllIframeOverlays, { passive: true });
   window.addEventListener("resize", repositionLockedHighlight, { passive: true });
 }
@@ -1251,6 +1252,7 @@ function detachHoverListeners() {
   removeIframeOverlays();
   stopIframeObserver();
   window.removeEventListener("scroll", repositionAllIframeOverlays);
+  window.removeEventListener("scroll", repositionLockedHighlight);
   window.removeEventListener("resize", repositionAllIframeOverlays);
   window.removeEventListener("resize", repositionLockedHighlight);
 
@@ -1260,19 +1262,41 @@ function detachHoverListeners() {
   }
 }
 
+// Check if an element is inside a top-layer popover or dialog.
+// Elements in the top layer render above the entire document regardless
+// of z-index, so the highlight overlay must also be in the top layer
+// (and re-promoted to stack above the target's layer).
+function isInTopLayer(element) {
+  let current = element;
+  while (current && current !== document.documentElement) {
+    try {
+      if (current.matches(":popover-open")) return true;
+    } catch (e) { /* :popover-open not supported — fall through */ }
+    if (current.tagName === "DIALOG" && current.open) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
 function createHighlightOverlay() {
   const overlay = document.createElement("div");
   overlay.id = "pathfinder-x-highlight";
+  overlay.setAttribute("popover", "manual");
   overlay.style.cssText = `
-    position: absolute;
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    padding: 0;
     background: rgba(255, 0, 0, 0.3);
     border: 2px solid #ff0000;
     pointer-events: none;
-    z-index: 999999;
+    z-index: 2147483647;
     box-sizing: border-box;
     transition: all 0.1s ease;
+    overflow: visible;
   `;
-  document.body.appendChild(overlay);
+  document.documentElement.appendChild(overlay);
+  try { overlay.showPopover(); } catch (e) { /* Popover API unavailable */ }
   return overlay;
 }
 
@@ -1295,12 +1319,19 @@ function highlightElement(element) {
     highlightedElement = createHighlightOverlay();
   }
 
-  const rect = element.getBoundingClientRect();
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+  // If the target lives inside a top-layer popover/dialog, re-promote
+  // our overlay so it stacks above that layer.
+  if (isInTopLayer(element)) {
+    try {
+      highlightedElement.hidePopover();
+      highlightedElement.showPopover();
+    } catch (e) { /* Popover API unavailable */ }
+  }
 
-  highlightedElement.style.top = rect.top + scrollTop + "px";
-  highlightedElement.style.left = rect.left + scrollLeft + "px";
+  const rect = element.getBoundingClientRect();
+
+  highlightedElement.style.top = rect.top + "px";
+  highlightedElement.style.left = rect.left + "px";
   highlightedElement.style.width = rect.width + "px";
   highlightedElement.style.height = rect.height + "px";
   highlightedElement.style.display = "block";
@@ -1308,6 +1339,7 @@ function highlightElement(element) {
 
 function removeHighlight() {
   if (highlightedElement) {
+    try { highlightedElement.hidePopover(); } catch (e) { /* ignore */ }
     highlightedElement.remove();
     highlightedElement = null;
   }
@@ -1460,15 +1492,12 @@ function highlightElementInIframe(element, iframe) {
   const paddingLeft = parseFloat(style.paddingLeft) || 0;
   const paddingTop = parseFloat(style.paddingTop) || 0;
 
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-
   // elemRect is in the iframe's internal (layout) space.
   // Scale border/padding/element offsets to the parent's visual space.
   highlightedElement.style.top =
-    (iframeRect.top + (borderTop + paddingTop + elemRect.top) * scale.y + scrollTop) + "px";
+    (iframeRect.top + (borderTop + paddingTop + elemRect.top) * scale.y) + "px";
   highlightedElement.style.left =
-    (iframeRect.left + (borderLeft + paddingLeft + elemRect.left) * scale.x + scrollLeft) + "px";
+    (iframeRect.left + (borderLeft + paddingLeft + elemRect.left) * scale.x) + "px";
   highlightedElement.style.width = (elemRect.width * scale.x) + "px";
   highlightedElement.style.height = (elemRect.height * scale.y) + "px";
   highlightedElement.style.display = "block";
