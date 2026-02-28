@@ -1,13 +1,7 @@
 document.addEventListener("DOMContentLoaded", async () => {
   // Establish a port so the background can detect when the panel closes.
   // Keep a reference to prevent the Port from being garbage-collected prematurely.
-  const sidepanelPort = chrome.runtime.connect({ name: "sidepanel" });
-
-  // Send the active tab ID so the background can target the correct tab on disconnect.
-  const activeTab = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (activeTab[0]?.id) {
-    sidepanelPort.postMessage({ type: "INIT", tabId: activeTab[0].id });
-  }
+  const sidepanelPort = chrome.runtime.connect({ name: "sidepanel" }); // eslint-disable-line no-unused-vars
 
   const xpathContainer = document.getElementById("xpathContainer");
   const elementInfoContainer = document.getElementById("elementInfo");
@@ -31,7 +25,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   let currentXPaths = [];
   let currentContext = null;
   let isLocked = false;
+  let lockedFrameId = null;   // frameId of the frame containing the locked element
   let fullTreeData = null;    // Complete serialized tree (from body down)
+  let targetPathSet = null;   // Set of node objects on the path from root to target
   let currentZoomDepth = 0;   // How many levels to skip from the top
   let treeWordWrap = false;
 
@@ -136,6 +132,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  // Send a message to the specific frame that holds the locked element,
+  // falling back to the top frame if no frameId is known.
+  async function sendMessageToLockedFrame(message) {
+    try {
+      const tab = await getActiveTab();
+      if (!tab?.id) return;
+      const options = typeof lockedFrameId === "number" ? { frameId: lockedFrameId } : {};
+      await new Promise((resolve) => {
+        chrome.tabs.sendMessage(tab.id, message, options, () => {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      });
+    } catch (error) {
+      // Failed to send
+    }
+  }
+
   // Restore saved state for a given tab
   async function restoreTabState(tabId) {
     if (!tabId) {
@@ -156,6 +170,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       if (locked) {
         isLocked = true;
+        lockedFrameId = saved.context?.frame?.frameId ?? null;
         lockControls.style.display = "flex";
       }
     } else {
@@ -208,6 +223,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     } else if (message.type === "XPATH_LOCKED") {
       isLocked = true;
+      lockedFrameId = message.context?.frame?.frameId ?? null;
       displayXPaths(
         message.xpaths,
         message.elementInfo,
@@ -222,6 +238,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     } else if (message.type === "XPATH_UNLOCKED") {
       isLocked = false;
+      lockedFrameId = null;
       lockControls.style.display = "none";
       clearDisplay();
     } else if (message.type === "TOGGLE_INSPECT") {
@@ -424,10 +441,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     return node.children && node.children.length > 0;
   }
 
-  function isNodeOnTargetPath(node) {
-    if (node.isTarget) return true;
-    if (!node.children) return false;
-    return node.children.some(c => isNodeOnTargetPath(c));
+  // Build a Set of all node objects on the path from `node` down to the target.
+  // Returns the Set on success, or null if the target is not in this subtree.
+  function buildTargetPathSet(node) {
+    if (node.isTarget) return new Set([node]);
+    if (!node.children) return null;
+    for (const child of node.children) {
+      const set = buildTargetPathSet(child);
+      if (set) {
+        set.add(node);
+        return set;
+      }
+    }
+    return null;
   }
 
   // Walk down the target path by `depth` levels to find the subtree root to render
@@ -435,21 +461,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     let node = tree;
     for (let i = 0; i < depth; i++) {
       if (!node.children) return node;
-      const pathChild = node.children.find(c => isNodeOnTargetPath(c));
+      const pathChild = node.children.find(c => targetPathSet?.has(c));
       if (!pathChild) return node;
       node = pathChild;
     }
     return node;
-  }
-
-  // Count how many levels exist on the target path
-  function getTargetPathLength(node) {
-    if (node.isTarget) return 0;
-    if (!node.children) return 0;
-    for (const child of node.children) {
-      if (isNodeOnTargetPath(child)) return 1 + getTargetPathLength(child);
-    }
-    return 0;
   }
 
   function buildTreeNodeEl(node, depth, startExpanded) {
@@ -557,9 +573,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!expanded) childrenContainer.style.display = "none";
 
       node.children.forEach(child => {
-        const childOnPath = isNodeOnTargetPath(child);
         childrenContainer.appendChild(
-          buildTreeNodeEl(child, depth + 1, childOnPath)
+          buildTreeNodeEl(child, depth + 1, targetPathSet?.has(child) ?? false)
         );
       });
 
@@ -587,12 +602,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       wrapper.appendChild(childrenContainer);
 
-      // Toggle handler
+      // Toggle handler — read state from DOM so setExpandAll() stays in sync
       line.addEventListener("click", (e) => {
         if (e.button !== 0) return;
-        expanded = !expanded;
-        arrow.textContent = expanded ? "\u25BE" : "\u25B8";
-        childrenContainer.style.display = expanded ? "" : "none";
+        const isExpanded = childrenContainer.style.display !== "none";
+        arrow.textContent = isExpanded ? "\u25B8" : "\u25BE";
+        childrenContainer.style.display = isExpanded ? "none" : "";
       });
     }
 
@@ -607,7 +622,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function updateZoomButtons() {
     if (!fullTreeData) return;
-    const maxZoom = getTargetPathLength(fullTreeData);
+    const maxZoom = (targetPathSet?.size ?? 1) - 1;
     domTreeZoomIn.disabled = currentZoomDepth >= maxZoom;
     domTreeZoomOut.disabled = currentZoomDepth <= 0;
   }
@@ -633,10 +648,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     hideTreeContextMenu();
     if (!treeData) {
       fullTreeData = null;
+      targetPathSet = null;
       domTreeSection.style.display = "none";
       return;
     }
     fullTreeData = treeData;
+    targetPathSet = buildTargetPathSet(treeData) ?? new Set();
     currentZoomDepth = treeData._defaultDepth || 0;
     domTreeSection.style.display = "block";
     renderTreeFromZoom();
@@ -652,7 +669,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   domTreeZoomIn.addEventListener("click", () => {
     if (!fullTreeData) return;
-    const maxZoom = getTargetPathLength(fullTreeData);
+    const maxZoom = (targetPathSet?.size ?? 1) - 1;
     if (currentZoomDepth < maxZoom) {
       currentZoomDepth++;
       renderTreeFromZoom();
@@ -678,7 +695,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const items = [];
 
     // "Zoom to here" — only for nodes on the target path, above the target
-    if (isNodeOnTargetPath(node) && !node.isTarget) {
+    if (targetPathSet?.has(node) && !node.isTarget) {
       items.push({
         label: "Zoom to here",
         action: () => {
@@ -686,7 +703,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           let depth = 0;
           let cur = fullTreeData;
           while (cur && cur !== node) {
-            const pathChild = cur.children?.find(c => isNodeOnTargetPath(c));
+            const pathChild = cur.children?.find(c => targetPathSet?.has(c));
             if (!pathChild) break;
             depth++;
             cur = pathChild;
@@ -702,7 +719,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       items.push({
         label: "Select element",
         action: () => {
-          sendMessageToAllFrames({ type: "SELECT_TREE_NODE", path: node._path });
+          sendMessageToLockedFrame({ type: "SELECT_TREE_NODE", path: node._path });
         }
       });
     }
@@ -896,6 +913,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     domTreeSection.style.display = "none";
     domTreeContainer.textContent = "";
     fullTreeData = null;
+    targetPathSet = null;
     hideTreeContextMenu();
     clearButton.style.display = "none";
     if (!isLocked) {
@@ -973,6 +991,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Clear lock UI and state when inspection is toggled off
       if (isLocked) {
         isLocked = false;
+        lockedFrameId = null;
         lockControls.style.display = "none";
       }
     } catch (error) {
@@ -1000,6 +1019,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Reset for same-tab navigation (old locked element no longer exists)
   function resetForNavigation(tabId) {
     isLocked = false;
+    lockedFrameId = null;
     lockControls.style.display = "none";
     if (tabId) {
       chrome.storage.local.remove(storageKeyForTab(tabId));
@@ -1012,6 +1032,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       // Reset UI first, then restore saved state for the new tab
       isLocked = false;
+      lockedFrameId = null;
       lockControls.style.display = "none";
       clearDisplay();
 

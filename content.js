@@ -95,10 +95,13 @@ function filterUniqueOptions(options) {
 }
 
 function isI18nSafeXPath(xpath) {
+  // Only flags the most common text-content patterns (text(), normalize-space()).
+  // XPaths using contains(., "...") or direct string comparison are not caught here.
   return !/text\(\)|normalize-space\(\.?\)/.test(xpath);
 }
 
 // Generate a table-position XPath for TD/TH elements (e.g. //table[@id='x']/tbody/tr[3]/td[2])
+// Note: column index is based on DOM child position and does not account for colspan/rowspan.
 function generateTablePositionXPath(element) {
   const tag = element.tagName;
   if (tag !== "TD" && tag !== "TH") return null;
@@ -126,20 +129,20 @@ function generateTablePositionXPath(element) {
   // Build table identifier
   let tableSelector = "//table";
   if (table.id) {
-    tableSelector = `//table[@id='${table.id}']`;
+    tableSelector = `//table[@id=${escapeXPathString(table.id)}]`;
   } else {
     const ariaLabel = table.getAttribute("aria-label");
     const testId = table.getAttribute("data-testid") || table.getAttribute("data-test");
     if (ariaLabel) {
-      tableSelector = `//table[@aria-label='${ariaLabel}']`;
+      tableSelector = `//table[@aria-label=${escapeXPathString(ariaLabel)}]`;
     } else if (testId) {
       const attrName = table.getAttribute("data-testid") ? "data-testid" : "data-test";
-      tableSelector = `//table[@${attrName}='${testId}']`;
+      tableSelector = `//table[@${attrName}=${escapeXPathString(testId)}]`;
     } else {
       // Fallback: use class or position
       const className = table.className?.split(/\s+/).filter(Boolean)[0];
       if (className) {
-        tableSelector = `//table[contains(@class,'${className}')]`;
+        tableSelector = `//table[contains(@class,${escapeXPathString(className)})]`;
       }
     }
   }
@@ -954,7 +957,8 @@ const WRAPPER_TAGS = new Set([
 const FORM_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA", "BUTTON"]);
 
 function resolveSmartTarget(element) {
-  // SVG child elements (path, circle, rect, etc.) → select the parent <svg>
+  // SVG child elements (path, circle, rect, etc.) → select the parent <svg>.
+  // For inline SVG in HTML, tagName is lowercase so "svg" comparison is correct.
   if (element instanceof SVGElement && element.tagName !== "svg") {
     const svg = element.closest("svg");
     if (svg) return svg;
@@ -1202,6 +1206,11 @@ const iframeLoadListened = new WeakSet();
 function cleanup() {
   isExtensionValid = false;
   removeHighlight();
+  if (highlightedElement) {
+    try { highlightedElement.hidePopover(); } catch (e) { /* ignore */ }
+    highlightedElement.remove();
+    highlightedElement = null;
+  }
 
   if (throttleTimeout) {
     clearTimeout(throttleTimeout);
@@ -1228,9 +1237,11 @@ function cleanup() {
 
 function attachHoverListeners() {
   if (listenersAttached) return;
-  document.addEventListener("mouseover", handleMouseOver, { passive: true });
-  document.addEventListener("mouseout", handleMouseOut, { passive: true });
-  document.addEventListener("click", handleClick, { passive: false });
+  // Use capture phase so events are seen before any intermediate handler
+  // calls stopPropagation() (e.g. Jira / Atlassian UI frameworks).
+  document.addEventListener("mouseover", handleMouseOver, { passive: true, capture: true });
+  document.addEventListener("mouseout", handleMouseOut, { passive: true, capture: true });
+  document.addEventListener("click", handleClick, { passive: false, capture: true });
   document.addEventListener("keydown", handleKeyDown, { passive: false });
   listenersAttached = true;
 
@@ -1244,9 +1255,9 @@ function attachHoverListeners() {
 
 function detachHoverListeners() {
   if (!listenersAttached) return;
-  document.removeEventListener("mouseover", handleMouseOver);
-  document.removeEventListener("mouseout", handleMouseOut);
-  document.removeEventListener("click", handleClick);
+  document.removeEventListener("mouseover", handleMouseOver, { capture: true });
+  document.removeEventListener("mouseout", handleMouseOut, { capture: true });
+  document.removeEventListener("click", handleClick, { capture: true });
   document.removeEventListener("keydown", handleKeyDown);
   listenersAttached = false;
 
@@ -1318,6 +1329,9 @@ function updateHighlightStyle(locked = false) {
 function highlightElement(element) {
   if (!highlightedElement) {
     highlightedElement = createHighlightOverlay();
+  } else {
+    // Re-enter the top layer if the overlay was hidden via removeHighlight()
+    try { highlightedElement.showPopover(); } catch (e) { /* already shown or unavailable */ }
   }
 
   // If the target lives inside a top-layer popover/dialog, re-promote
@@ -1340,9 +1354,9 @@ function highlightElement(element) {
 
 function removeHighlight() {
   if (highlightedElement) {
-    try { highlightedElement.hidePopover(); } catch (e) { /* ignore */ }
-    highlightedElement.remove();
-    highlightedElement = null;
+    // Hide visually but keep in DOM so it can be reused on the next hover
+    // without the cost of creating/appending a new element every time.
+    highlightedElement.style.display = "none";
   }
 }
 
@@ -1491,6 +1505,8 @@ function getIframeRelativeCoords(event, iframe) {
 function highlightElementInIframe(element, iframe) {
   if (!highlightedElement) {
     highlightedElement = createHighlightOverlay();
+  } else {
+    try { highlightedElement.showPopover(); } catch (e) { /* already shown or unavailable */ }
   }
 
   const elemRect = element.getBoundingClientRect();
@@ -1990,6 +2006,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         lockElement(target);
       }
     }, 200);
+    lastContextMenuTarget = null;
     lastContextMenuIframe = null;
     sendResponse({ success: true });
   } else if (message.type === "SELECT_TREE_NODE") {
@@ -2084,7 +2101,7 @@ if (initializeContentScript()) {
   document.addEventListener("contextmenu", (event) => {
     lastContextMenuTarget = resolveSmartTarget(event.target);
     lastContextMenuIframe = null;
-  }, { passive: true });
+  }, { passive: true, capture: true });
 
   // Check extension context lazily — only when interaction is happening
   // instead of polling every 5 seconds on every page

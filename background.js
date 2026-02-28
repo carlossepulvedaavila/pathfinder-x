@@ -17,16 +17,6 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "sidepanel") return;
 
-  // The side panel will send its tab ID via the port since
-  // port.sender.tab is undefined for extension pages.
-  let portTabId = null;
-
-  port.onMessage.addListener((msg) => {
-    if (msg.type === "INIT" && typeof msg.tabId === "number") {
-      portTabId = msg.tabId;
-    }
-  });
-
   port.onDisconnect.addListener(() => {
     function sendPanelClosed(tabId) {
       chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
