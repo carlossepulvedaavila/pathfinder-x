@@ -33,13 +33,12 @@ chrome.runtime.onConnect.addListener((port) => {
       });
     }
 
-    // Broadcast PANEL_CLOSED to ALL tabs so every content script
-    // can clean up its visual state (highlights, hover listeners).
-    chrome.tabs.query({}, (tabs) => {
-      if (chrome.runtime.lastError || !tabs) return;
-      for (const tab of tabs) {
-        if (tab.id) sendPanelClosed(tab.id);
-      }
+    // Send PANEL_CLOSED only to the active tab in the current window.
+    // Side-panel ports don't expose sender.tab, so query for the active tab.
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError || !tabs || !tabs.length) return;
+      const tabId = tabs[0].id;
+      if (tabId) sendPanelClosed(tabId);
     });
   });
 });
