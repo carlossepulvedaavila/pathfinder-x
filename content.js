@@ -2060,6 +2060,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     removeHighlight();
     lastElement = null;
+    detachHoverListeners();
     sendResponse({ success: true });
   } else if (message.type === "LOCK_STATE_SYNC") {
     if (message.locked) {
