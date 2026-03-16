@@ -15,10 +15,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   const lockControls = document.getElementById("lockControls");
   const unlockButton = document.getElementById("unlockButton");
   const toggle = document.getElementById("toggle");
+  const domTreeSection = document.getElementById("domTreeSection");
+  const domTreeContainer = document.getElementById("domTree");
+  const domTreeZoomIn = document.getElementById("domTreeZoomIn");
+  const domTreeZoomOut = document.getElementById("domTreeZoomOut");
+  const domTreeContextMenu = document.getElementById("domTreeContextMenu");
+  const domTreeWrapToggle = document.getElementById("domTreeWrapToggle");
 
   let currentXPaths = [];
   let currentContext = null;
   let isLocked = false;
+  let lockedFrameId = null;   // frameId of the frame containing the locked element
+  let fullTreeData = null;    // Complete serialized tree (from body down)
+  let targetPathSet = null;   // Set of node objects on the path from root to target
+  let currentZoomDepth = 0;   // How many levels to skip from the top
+  let treeWordWrap = false;
 
   function storageKeyForTab(tabId) {
     return `tabState_${tabId}`;
@@ -121,6 +132,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  // Send a message to the specific frame that holds the locked element,
+  // falling back to the top frame if no frameId is known.
+  async function sendMessageToLockedFrame(message) {
+    try {
+      const tab = await getActiveTab();
+      if (!tab?.id) return;
+      const options = typeof lockedFrameId === "number" ? { frameId: lockedFrameId } : {};
+      await new Promise((resolve) => {
+        chrome.tabs.sendMessage(tab.id, message, options, () => {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      });
+    } catch (error) {
+      // Failed to send
+    }
+  }
+
   // Restore saved state for a given tab
   async function restoreTabState(tabId) {
     if (!tabId) {
@@ -137,10 +166,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       (saved.type === "XPATH_FOUND" || saved.type === "XPATH_LOCKED")
     ) {
       const locked = saved.type === "XPATH_LOCKED";
-      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context);
+      displayXPaths(saved.xpaths, saved.elementInfo, locked, saved.context, saved.domTree);
 
       if (locked) {
         isLocked = true;
+        lockedFrameId = saved.context?.frame?.frameId ?? null;
         lockControls.style.display = "flex";
       }
     } else {
@@ -193,11 +223,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     } else if (message.type === "XPATH_LOCKED") {
       isLocked = true;
+      lockedFrameId = message.context?.frame?.frameId ?? null;
       displayXPaths(
         message.xpaths,
         message.elementInfo,
         true,
-        message.context
+        message.context,
+        message.domTree
       );
       lockControls.style.display = "flex";
     } else if (message.type === "XPATH_CLEAR") {
@@ -206,6 +238,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     } else if (message.type === "XPATH_UNLOCKED") {
       isLocked = false;
+      lockedFrameId = null;
       lockControls.style.display = "none";
       clearDisplay();
     } else if (message.type === "TOGGLE_INSPECT") {
@@ -246,6 +279,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     optionDiv.appendChild(content);
     content.appendChild(textSpan);
     content.appendChild(validation);
+
+    if (option.i18nSafe === false) {
+      const i18nBadge = document.createElement("div");
+      i18nBadge.className = "validation i18n-warning";
+      i18nBadge.textContent = "i18n-sensitive";
+      i18nBadge.title = "This selector uses text content and may break on translated pages";
+      content.appendChild(i18nBadge);
+    }
+
+    if (option.dynamicId) {
+      const dynamicBadge = document.createElement("div");
+      dynamicBadge.className = "validation dynamic-id-warning";
+      dynamicBadge.textContent = "dynamic ID";
+      dynamicBadge.title = "This ID appears auto-generated and may change";
+      content.appendChild(dynamicBadge);
+    }
 
     // Return both the DOM element and refs for batch validation
     return { element: optionDiv, validation, option };
@@ -386,11 +435,346 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  // ── DOM Context Tree ──────────────────────────────────────────────
+
+  function hasExpandableChildren(node) {
+    return node.children && node.children.length > 0;
+  }
+
+  // Build a Set of all node objects on the path from `node` down to the target.
+  // Returns the Set on success, or null if the target is not in this subtree.
+  function buildTargetPathSet(node) {
+    if (node.isTarget) return new Set([node]);
+    if (!node.children) return null;
+    for (const child of node.children) {
+      const set = buildTargetPathSet(child);
+      if (set) {
+        set.add(node);
+        return set;
+      }
+    }
+    return null;
+  }
+
+  // Walk down the target path by `depth` levels to find the subtree root to render
+  function getSubtreeAtDepth(tree, depth) {
+    let node = tree;
+    for (let i = 0; i < depth; i++) {
+      if (!node.children) return node;
+      const pathChild = node.children.find(c => targetPathSet?.has(c));
+      if (!pathChild) return node;
+      node = pathChild;
+    }
+    return node;
+  }
+
+  function buildTreeNodeEl(node, depth, startExpanded) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "dom-tree-node";
+
+    const line = document.createElement("div");
+    line.className = "dom-tree-line" + (node.isTarget ? " dom-tree-target" : "");
+    line.style.setProperty("--tree-indent", (depth * 16 + 8) + "px");
+
+    const expandable = hasExpandableChildren(node);
+    let childrenContainer = null;
+    let expanded = startExpanded;
+
+    // Toggle arrow
+    const arrow = document.createElement("span");
+    arrow.className = "dom-tree-arrow";
+    if (expandable) {
+      arrow.textContent = expanded ? "\u25BE" : "\u25B8";
+      arrow.classList.add("dom-tree-arrow-active");
+    } else {
+      arrow.textContent = " ";
+    }
+    line.appendChild(arrow);
+
+    // Opening bracket
+    const open = document.createElement("span");
+    open.className = "dom-tree-bracket";
+    open.textContent = "<";
+    line.appendChild(open);
+
+    // Tag name
+    const tag = document.createElement("span");
+    tag.className = "dom-tree-tag";
+    tag.textContent = node.tag;
+    line.appendChild(tag);
+
+    // ID
+    if (node.id) {
+      const id = document.createElement("span");
+      id.className = "dom-tree-id";
+      id.textContent = "#" + node.id;
+      line.appendChild(id);
+    }
+
+    // Classes
+    if (node.classes && node.classes.length > 0) {
+      const cls = document.createElement("span");
+      cls.className = "dom-tree-class";
+      cls.textContent = "." + node.classes.join(".");
+      line.appendChild(cls);
+    }
+
+    // Key attributes
+    if (node.attrs) {
+      for (const [key, val] of Object.entries(node.attrs)) {
+        const attr = document.createElement("span");
+        attr.className = "dom-tree-attr";
+        attr.textContent = ` ${key}="${val}"`;
+        line.appendChild(attr);
+      }
+    }
+
+    // Closing bracket
+    const close = document.createElement("span");
+    close.className = "dom-tree-bracket";
+    close.textContent = ">";
+    line.appendChild(close);
+
+    // Inline text content (only for leaf-ish nodes or short text)
+    if (node.text && (!expandable || node.childCount <= 1)) {
+      const text = document.createElement("span");
+      text.className = "dom-tree-text";
+      text.textContent = node.text;
+      line.appendChild(text);
+
+      const endTag = document.createElement("span");
+      endTag.className = "dom-tree-bracket";
+      endTag.textContent = "</";
+      line.appendChild(endTag);
+      const endName = document.createElement("span");
+      endName.className = "dom-tree-tag";
+      endName.textContent = node.tag;
+      line.appendChild(endName);
+      const endClose = document.createElement("span");
+      endClose.className = "dom-tree-bracket";
+      endClose.textContent = ">";
+      line.appendChild(endClose);
+    }
+
+    // Child count indicator when collapsed and has unserialized children
+    if (node.childCount > 0 && !expandable) {
+      const count = document.createElement("span");
+      count.className = "dom-tree-childcount";
+      count.textContent = ` ${node.childCount} ${node.childCount === 1 ? "child" : "children"}`;
+      line.appendChild(count);
+    }
+
+    wrapper.appendChild(line);
+
+    // Build children container
+    if (expandable) {
+      childrenContainer = document.createElement("div");
+      childrenContainer.className = "dom-tree-children";
+      if (!expanded) childrenContainer.style.display = "none";
+
+      node.children.forEach(child => {
+        childrenContainer.appendChild(
+          buildTreeNodeEl(child, depth + 1, targetPathSet?.has(child) ?? false)
+        );
+      });
+
+      // Closing tag line
+      const closingLine = document.createElement("div");
+      closingLine.className = "dom-tree-line dom-tree-closing";
+      closingLine.style.setProperty("--tree-indent", (depth * 16 + 8) + "px");
+      const closingArrowSpacer = document.createElement("span");
+      closingArrowSpacer.className = "dom-tree-arrow";
+      closingArrowSpacer.textContent = " ";
+      closingLine.appendChild(closingArrowSpacer);
+      const closeTag = document.createElement("span");
+      closeTag.className = "dom-tree-bracket";
+      closeTag.textContent = "</";
+      closingLine.appendChild(closeTag);
+      const closeTagName = document.createElement("span");
+      closeTagName.className = "dom-tree-tag";
+      closeTagName.textContent = node.tag;
+      closingLine.appendChild(closeTagName);
+      const closeTagEnd = document.createElement("span");
+      closeTagEnd.className = "dom-tree-bracket";
+      closeTagEnd.textContent = ">";
+      closingLine.appendChild(closeTagEnd);
+      childrenContainer.appendChild(closingLine);
+
+      wrapper.appendChild(childrenContainer);
+
+      // Toggle handler — read state from DOM so setExpandAll() stays in sync
+      line.addEventListener("click", (e) => {
+        if (e.button !== 0) return;
+        const isExpanded = childrenContainer.style.display !== "none";
+        arrow.textContent = isExpanded ? "\u25B8" : "\u25BE";
+        childrenContainer.style.display = isExpanded ? "none" : "";
+      });
+    }
+
+    // Right-click context menu
+    line.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showTreeContextMenu(e, node, wrapper);
+    });
+
+    return wrapper;
+  }
+
+  function updateZoomButtons() {
+    if (!fullTreeData) return;
+    const maxZoom = (targetPathSet?.size ?? 1) - 1;
+    domTreeZoomIn.disabled = currentZoomDepth >= maxZoom;
+    domTreeZoomOut.disabled = currentZoomDepth <= 0;
+  }
+
+  function renderTreeFromZoom() {
+    domTreeContainer.textContent = "";
+    if (!fullTreeData) return;
+    const subtree = getSubtreeAtDepth(fullTreeData, currentZoomDepth);
+    domTreeContainer.appendChild(buildTreeNodeEl(subtree, 0, true));
+    updateZoomButtons();
+
+    // Auto-scroll to target element
+    requestAnimationFrame(() => {
+      const target = domTreeContainer.querySelector(".dom-tree-target");
+      if (target) {
+        target.scrollIntoView({ block: "center", behavior: "instant" });
+      }
+    });
+  }
+
+  function renderDomTree(treeData) {
+    domTreeContainer.textContent = "";
+    hideTreeContextMenu();
+    if (!treeData) {
+      fullTreeData = null;
+      targetPathSet = null;
+      domTreeSection.style.display = "none";
+      return;
+    }
+    fullTreeData = treeData;
+    targetPathSet = buildTargetPathSet(treeData) ?? new Set();
+    currentZoomDepth = treeData._defaultDepth || 0;
+    domTreeSection.style.display = "block";
+    renderTreeFromZoom();
+  }
+
+  // Zoom controls
+  domTreeZoomOut.addEventListener("click", () => {
+    if (currentZoomDepth > 0) {
+      currentZoomDepth--;
+      renderTreeFromZoom();
+    }
+  });
+
+  domTreeZoomIn.addEventListener("click", () => {
+    if (!fullTreeData) return;
+    const maxZoom = (targetPathSet?.size ?? 1) - 1;
+    if (currentZoomDepth < maxZoom) {
+      currentZoomDepth++;
+      renderTreeFromZoom();
+    }
+  });
+
+  domTreeWrapToggle.addEventListener("click", () => {
+    treeWordWrap = !treeWordWrap;
+    domTreeContainer.classList.toggle("dom-tree-wrap", treeWordWrap);
+    domTreeWrapToggle.classList.toggle("dom-tree-zoom-btn-active", treeWordWrap);
+  });
+
+  // Context menu
+  function showTreeContextMenu(e, node, nodeWrapper) {
+    domTreeContextMenu.textContent = "";
+    domTreeContextMenu.style.display = "block";
+
+    // Position relative to the tree section
+    const sectionRect = domTreeSection.getBoundingClientRect();
+    domTreeContextMenu.style.left = (e.clientX - sectionRect.left) + "px";
+    domTreeContextMenu.style.top = (e.clientY - sectionRect.top) + "px";
+
+    const items = [];
+
+    // "Zoom to here" — only for nodes on the target path, above the target
+    if (targetPathSet?.has(node) && !node.isTarget) {
+      items.push({
+        label: "Zoom to here",
+        action: () => {
+          // Find the depth of this node in the full tree
+          let depth = 0;
+          let cur = fullTreeData;
+          while (cur && cur !== node) {
+            const pathChild = cur.children?.find(c => targetPathSet?.has(c));
+            if (!pathChild) break;
+            depth++;
+            cur = pathChild;
+          }
+          currentZoomDepth = depth;
+          renderTreeFromZoom();
+        }
+      });
+    }
+
+    // "Select element" — for any node that isn't the current target
+    if (!node.isTarget && node._path) {
+      items.push({
+        label: "Select element",
+        action: () => {
+          sendMessageToLockedFrame({ type: "SELECT_TREE_NODE", path: node._path });
+        }
+      });
+    }
+
+    // Expand all / Collapse all
+    const childrenEl = nodeWrapper.querySelector(":scope > .dom-tree-children");
+    if (childrenEl) {
+      items.push({
+        label: "Expand all",
+        action: () => setExpandAll(nodeWrapper, true)
+      });
+      items.push({
+        label: "Collapse all",
+        action: () => setExpandAll(nodeWrapper, false)
+      });
+    }
+
+    if (items.length === 0) {
+      hideTreeContextMenu();
+      return;
+    }
+
+    items.forEach(item => {
+      const menuItem = document.createElement("div");
+      menuItem.className = "dom-tree-context-item";
+      menuItem.textContent = item.label;
+      menuItem.addEventListener("click", () => {
+        item.action();
+        hideTreeContextMenu();
+      });
+      domTreeContextMenu.appendChild(menuItem);
+    });
+  }
+
+  function hideTreeContextMenu() {
+    domTreeContextMenu.style.display = "none";
+    domTreeContextMenu.textContent = "";
+  }
+
+  function setExpandAll(nodeWrapper, expand) {
+    const allChildren = nodeWrapper.querySelectorAll(".dom-tree-children");
+    const allArrows = nodeWrapper.querySelectorAll(".dom-tree-arrow-active");
+    allChildren.forEach(c => c.style.display = expand ? "" : "none");
+    allArrows.forEach(a => a.textContent = expand ? "\u25BE" : "\u25B8");
+  }
+
+  // Hide context menu on click elsewhere
+  document.addEventListener("click", hideTreeContextMenu);
+
   function displayXPaths(
     xpaths,
     elementDetails,
     locked = false,
-    context = null
+    context = null,
+    domTree = null
   ) {
     currentXPaths = xpaths;
     currentContext = context;
@@ -407,6 +791,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       updateContextDisplay(context);
     } else {
       clearContextDisplay();
+    }
+
+    // Render DOM tree (only present in lock messages)
+    if (locked && domTree) {
+      renderDomTree(domTree);
+    } else {
+      renderDomTree(null);
     }
 
     // Clear container safely
@@ -519,6 +910,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     xpathContainer.appendChild(placeholder);
 
     elementInfoContainer.style.display = "none";
+    domTreeSection.style.display = "none";
+    domTreeContainer.textContent = "";
+    fullTreeData = null;
+    targetPathSet = null;
+    hideTreeContextMenu();
     clearButton.style.display = "none";
     if (!isLocked) {
       lockControls.style.display = "none";
@@ -595,6 +991,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Clear lock UI and state when inspection is toggled off
       if (isLocked) {
         isLocked = false;
+        lockedFrameId = null;
         lockControls.style.display = "none";
       }
     } catch (error) {
@@ -622,6 +1019,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Reset for same-tab navigation (old locked element no longer exists)
   function resetForNavigation(tabId) {
     isLocked = false;
+    lockedFrameId = null;
     lockControls.style.display = "none";
     if (tabId) {
       chrome.storage.local.remove(storageKeyForTab(tabId));
@@ -634,15 +1032,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       // Reset UI first, then restore saved state for the new tab
       isLocked = false;
+      lockedFrameId = null;
       lockControls.style.display = "none";
       clearDisplay();
 
       await ensureContentScriptInjected();
+
+      // Always notify content script that the panel is open so it can
+      // re-highlight locked elements, regardless of hover preference.
+      await sendMessageToAllFrames({ type: "PANEL_OPENED" });
+
       const result = await chrome.storage.local.get("isHoveringEnabled");
       const isHoveringEnabled =
         !result || result.isHoveringEnabled !== false;
       if (isHoveringEnabled) {
-        await sendMessageToAllFrames({ type: "PANEL_OPENED" });
         await sendMessageToAllFrames({ type: "ENABLE_HOVER" });
       }
 

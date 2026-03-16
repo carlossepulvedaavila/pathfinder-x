@@ -45,6 +45,31 @@
           </div>
         </div>
 
+        <div class="dom-tree-section" id="domTreeSection" style="display: none">
+          <div class="dom-tree-header">
+            <strong>DOM Context</strong>
+            <div class="dom-tree-zoom">
+              <button class="dom-tree-zoom-btn" id="domTreeZoomOut" title="Zoom out (show more parents)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/>
+                </svg>
+              </button>
+              <button class="dom-tree-zoom-btn" id="domTreeZoomIn" title="Zoom in (show fewer parents)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+                </svg>
+              </button>
+              <button class="dom-tree-zoom-btn" id="domTreeWrapToggle" title="Toggle word wrap">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="13 16 11 18 13 20"/><path d="M3 18h4"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="dom-tree" id="domTree"></div>
+          <div class="dom-tree-context-menu" id="domTreeContextMenu" style="display: none"></div>
+        </div>
+
         <div id="xpathContainer">
           <div class="placeholder">
             <img

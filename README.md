@@ -10,10 +10,14 @@ Pathfinder-X is a simple and powerful Chrome extension that helps you find the b
 
 - **Instant XPath Generation:** Hover over any element to see its XPath in real time.
 - **Optimized for Automation:** Generates XPaths optimized for Playwright and Selenium.
-- **Multiple XPath Options:** Choose from optimized, structural, and attribute-based selectors.
+- **Multiple XPath Options:** Choose from optimized, structural, attribute-based, and table-position selectors.
 - **Lock and Unlock:** Lock onto an element with a click or **Space** to keep it selected while you work. Press **Space** again to unlock.
+- **DOM Context Tree:** When an element is locked, view an interactive DOM tree showing the element in context with expand/collapse, zoom controls, and word wrap.
 - **Side Panel UI:** Runs in Chrome's side panel so it stays open alongside the page.
 - **iFrame & Shadow DOM Support:** Inspects elements inside iframes and shadow roots.
+- **SVG Support:** Correctly generates XPaths for SVG elements using namespace-aware selectors.
+- **i18n Safety Warnings:** Flags selectors that rely on text content and may break on translated pages.
+- **Table-Aware Selectors:** Generates position-based XPaths for table cells (e.g. `//table[@id='x']/tbody/tr[3]/td[2]`).
 
 ## 🚀 How to Use
 
